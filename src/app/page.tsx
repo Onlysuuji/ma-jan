@@ -30,7 +30,6 @@ export default function Page() {
       junme: state.junme,
       isClosed: true,
       canRiichi: true,
-      opponentRiichi: false,
     });
   }, [state, hand14]);
 

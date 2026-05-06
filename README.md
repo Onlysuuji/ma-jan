@@ -22,6 +22,13 @@ npm run build
 npm test
 ```
 
+AI ベンチ:
+
+```bash
+npm run selfplay -- 50 42
+npm run tournament -- 40 42
+```
+
 ## 画面でできること
 
 - 13 枚の手牌が配られ、ツモ牌が 1 枚増えて 14 枚
@@ -44,11 +51,11 @@ src/
   app/                    Next.js App Router (画面)
   components/             Tile / Hand / River / GameInfo / AIPanel
   lib/
-    mahjong/              types, tiles, wall, shanten, ukeire, score
-    ai/                   evaluator (推奨打牌)
+    mahjong/              types, tiles, wall, shanten, ukeire, score, match, win, yaku
+    ai/                   evaluator, defense, 4人対戦用 agents
     game/                 1人練習用ステート (trainer)
 test/                     Node test runner のテスト
-scripts/                  自己対戦スクリプト置き場 (今後)
+scripts/                  自己対戦・4人対戦ベンチ
 python/                   学習・分析スクリプト置き場 (今後)
 ```
 

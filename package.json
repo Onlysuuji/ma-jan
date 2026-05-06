@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --import tsx --test test/**/*.test.ts",
-    "selfplay": "tsx scripts/selfplay.ts"
+    "selfplay": "tsx scripts/selfplay.ts",
+    "tournament": "tsx scripts/tournament.ts"
   },
   "dependencies": {
     "next": "14.2.15",

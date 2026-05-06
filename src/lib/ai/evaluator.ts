@@ -1,9 +1,8 @@
 import {
   NUM_TILES,
-  TILES_PER_KIND,
   type TileId,
 } from "../mahjong/types";
-import { tilesToCounts, sortTiles, tileDisplay, isYaochuu, isHonor } from "../mahjong/tiles";
+import { tilesToCounts, tileDisplay, isYaochuu, isHonor } from "../mahjong/tiles";
 import { shantenAllFromCounts } from "../mahjong/shanten";
 import { ukeireFromCounts, type UkeireTile } from "../mahjong/ukeire";
 import {
@@ -11,58 +10,60 @@ import {
   evaluateYakuPotential,
   isYakuhai,
 } from "../mahjong/score";
+import {
+  anyRiichi,
+  totalDanger,
+  type DefenseContext,
+  type OpponentInfo,
+} from "./defense";
 
 export interface DiscardCandidate {
-  /** the tile we'd discard */
   tile: TileId;
-  /** resulting 13-tile hand after discard */
   resultingShanten: number;
-  /** ukeire tiles of resulting hand */
   ukeire: UkeireTile[];
-  /** total ukeire (sum of remaining counts) */
   ukeireCount: number;
-  /** distinct ukeire kinds */
   ukeireKinds: number;
-  /** dora count of resulting closed tiles */
   doraCount: number;
-  /** estimated han potential after this discard */
   hanPotential: number;
-  /** safety score: lower = more dangerous, higher = safer (rough placeholder until defense AI is wired) */
-  safety: number;
+  /** total danger (sum across opponents, weighted by riichi). 0..~1+. */
+  danger: number;
   /** total composite score (higher = better) */
   score: number;
-  /** human-readable reason for this candidate */
   reason: string;
 }
 
 export interface EvaluatorContext {
-  /** dora tiles (not indicators) */
   doraTiles: TileId[];
   /** seen counts outside hand (river, dora indicators, melds, opponents' melds) */
   seenCounts?: number[];
-  /** round wind: 1=E,2=S,3=W,4=N */
   roundWind: number;
-  /** seat wind */
   seatWind: number;
-  /** turn number (1..18) for tempo decisions */
   junme?: number;
+  /** opponents (3 in 4-player; can be empty for solitaire). */
+  opponents?: OpponentInfo[];
+  /** own river (used for some defense heuristics) */
+  ownRiver?: TileId[];
+  /** Whether closed hand (no calls). Default true. */
+  isClosed?: boolean;
+  /** Whether we're already in riichi (cannot change discard) */
+  alreadyRiichi?: boolean;
+  /** Force a play mode. "auto" picks based on game state. */
+  mode?: "auto" | "attack" | "defense";
 }
 
 export interface EvaluationResult {
-  /** ranked candidates, best first */
   candidates: DiscardCandidate[];
-  /** the recommended discard (candidates[0]) */
   best: DiscardCandidate;
-  /** current 14-tile shanten (after draw, before discard) */
   currentShanten: number;
-  /** notes about the position */
+  /** active mode used for scoring */
+  mode: "attack" | "defense" | "balance";
   notes: string[];
 }
 
-/**
- * Evaluate every possible discard from the 14-tile hand.
- * Returns ranked candidates with a recommendation and reasoning.
- */
+const DANGER_WEIGHT_ATTACK = 800;
+const DANGER_WEIGHT_BALANCE = 4000;
+const DANGER_WEIGHT_DEFENSE = 50000;
+
 export function evaluateDiscards(
   closed14: TileId[],
   ctx: EvaluatorContext
@@ -76,8 +77,19 @@ export function evaluateDiscards(
   const currentShanten = currentShantenInfo.shanten;
 
   const seen = ctx.seenCounts ?? new Array(NUM_TILES).fill(0);
-  const candidates: DiscardCandidate[] = [];
+  const opponents = ctx.opponents ?? [];
+  const defenseCtx: DefenseContext = {
+    opponents,
+    seenCounts: seen,
+    ownRiver: ctx.ownRiver ?? [],
+  };
+  const opponentRiichi = anyRiichi(defenseCtx);
 
+  const mode = decideMode(ctx.mode, currentShanten, opponentRiichi);
+  const dangerWeight =
+    mode === "defense" ? DANGER_WEIGHT_DEFENSE : mode === "balance" ? DANGER_WEIGHT_BALANCE : DANGER_WEIGHT_ATTACK;
+
+  const candidates: DiscardCandidate[] = [];
   const uniqueTiles: TileId[] = [];
   for (let id = 0; id < NUM_TILES; id++) {
     if (counts[id] > 0) uniqueTiles.push(id);
@@ -93,29 +105,42 @@ export function evaluateDiscards(
     const ukeire = ukeireFromCounts(counts, seen);
     const yp = evaluateYakuPotential(remainingTiles, ctx.roundWind, ctx.seatWind);
     const doraCount = countDora(remainingTiles, ctx.doraTiles);
-    const safety = estimateSafety(id, ctx);
+    const danger = totalDanger(id, { ...defenseCtx, ownCounts: counts });
 
     counts[id]++;
 
     const ukeireKinds = ukeire.tiles.length;
     const ukeireCount = ukeire.total;
-    const shantenDelta = currentShanten - ukeire.shanten; // positive if discarding made worse
+    const shantenDelta = currentShanten - ukeire.shanten;
 
-    // Composite score: prioritize shanten, then ukeire, then打点, then safety.
     let score = 0;
-    score -= ukeire.shanten * 100000;
-    score += ukeireCount * 200;
-    score += ukeireKinds * 30;
-    score += yp.hanPotential * 80;
-    score += doraCount * 60;
-    score += safety * 5;
 
-    // Penalty for breaking a useful structure (shanten went up).
-    if (shantenDelta < 0) score -= 50000;
-
-    // Slight bonus for keeping yakuhai pair if no other yaku
-    if (yp.yakuhaiPairs > 0 && !yp.tanyao && yp.honitsuSuit === null && yp.chinitsuSuit === null) {
-      score += 30;
+    if (mode === "defense") {
+      // Pure safety: minimize danger; offense barely matters.
+      score -= danger * dangerWeight;
+      // Tie-breaker: small preference for not breaking shape.
+      score -= ukeire.shanten * 50;
+      score += ukeireCount * 5;
+    } else {
+      // Offense + safety blend
+      score -= ukeire.shanten * 100000;
+      score += ukeireCount * 200;
+      score += ukeireKinds * 30;
+      score += yp.hanPotential * 80;
+      score += doraCount * 60;
+      // Penalty for breaking a useful structure (shanten went up).
+      if (shantenDelta < 0) score -= 50000;
+      // Slight bonus for keeping yakuhai pair if no other yaku
+      if (
+        yp.yakuhaiPairs > 0 &&
+        !yp.tanyao &&
+        yp.honitsuSuit === null &&
+        yp.chinitsuSuit === null
+      ) {
+        score += 30;
+      }
+      // Defense penalty proportional to danger
+      score -= danger * dangerWeight;
     }
 
     const reason = buildReason({
@@ -130,6 +155,8 @@ export function evaluateDiscards(
       isYaochuu: isYaochuu(id),
       isHonor: isHonor(id),
       isYakuhaiTile: isYakuhai(id, ctx.roundWind, ctx.seatWind),
+      danger,
+      mode,
     });
 
     candidates.push({
@@ -140,7 +167,7 @@ export function evaluateDiscards(
       ukeireKinds,
       doraCount,
       hanPotential: yp.hanPotential,
-      safety,
+      danger,
       score,
       reason,
     });
@@ -156,38 +183,43 @@ export function evaluateDiscards(
   if (currentShantenInfo.forms.kokushi <= currentShantenInfo.forms.standard - 1) {
     notes.push("国士無双が有利な形です。");
   }
+  if (mode === "defense") {
+    notes.push("守備優先モードです (相手リーチかつ手が遠い)。");
+  } else if (mode === "balance") {
+    notes.push("攻守バランスモードです (相手リーチに対し押し引き)。");
+  }
 
   return {
     candidates,
     best: candidates[0],
     currentShanten,
+    mode,
     notes,
   };
 }
 
+function decideMode(
+  forced: EvaluatorContext["mode"],
+  currentShanten: number,
+  opponentRiichi: boolean
+): "attack" | "defense" | "balance" {
+  if (forced && forced !== "auto") return forced;
+  if (!opponentRiichi) return "attack";
+  if (currentShanten >= 3) return "defense";
+  if (currentShanten === 2) return "defense";
+  if (currentShanten <= 1) return "balance";
+  return "balance";
+}
+
 function isIsolated(id: TileId, counts: number[]): boolean {
   if (counts[id] >= 2) return false;
-  if (id >= 27) {
-    // honor: isolated means count=1 and no other copy
-    return counts[id] === 1;
-  }
+  if (id >= 27) return counts[id] === 1;
   const r = id % 9;
   const left2 = r >= 2 ? counts[id - 2] : 0;
   const left1 = r >= 1 ? counts[id - 1] : 0;
   const right1 = r <= 7 ? counts[id + 1] : 0;
   const right2 = r <= 6 ? counts[id + 2] : 0;
   return counts[id] === 1 && left2 + left1 + right1 + right2 === 0;
-}
-
-function estimateSafety(id: TileId, ctx: EvaluatorContext): number {
-  // Without opponent info this is just a rough heuristic:
-  // honors safer than terminals safer than middles
-  // Will be replaced by genbutsu / suji logic later.
-  if (isHonor(id)) return 4;
-  if (isYaochuu(id)) return 3;
-  const r = (id % 9) + 1;
-  if (r === 2 || r === 8) return 2;
-  return 1;
 }
 
 interface ReasonContext {
@@ -202,11 +234,23 @@ interface ReasonContext {
   isYaochuu: boolean;
   isHonor: boolean;
   isYakuhaiTile: boolean;
+  danger: number;
+  mode: "attack" | "defense" | "balance";
 }
 
 function buildReason(rc: ReasonContext): string {
   const parts: string[] = [];
   const name = tileDisplay(rc.tile);
+  if (rc.mode === "defense") {
+    parts.push(`守備優先: ${name} の危険度 ${rc.danger.toFixed(2)}`);
+    if (rc.danger === 0) parts.push("現物で安全");
+    else if (rc.danger < 0.2) parts.push("ほぼ安牌");
+    else if (rc.danger < 0.5) parts.push("中程度の危険");
+    else parts.push("危険牌");
+    if (rc.isHonor && !rc.isYakuhaiTile) parts.push("不要な字牌で外しやすい");
+    return parts.join("。 ") + "。";
+  }
+
   if (rc.newShanten < rc.currentShanten) {
     parts.push(`${name}を切るとシャンテンが進みます (${rc.currentShanten} → ${rc.newShanten})`);
   } else if (rc.newShanten === rc.currentShanten) {
@@ -217,9 +261,12 @@ function buildReason(rc: ReasonContext): string {
 
   parts.push(`受け入れ ${rc.ukeireCount} 枚 / ${rc.ukeireKinds} 種`);
 
+  if (rc.danger > 0.5) parts.push(`危険度 ${rc.danger.toFixed(2)}`);
+  else if (rc.danger > 0.2) parts.push(`やや危険 (${rc.danger.toFixed(2)})`);
+
   if (rc.isolated) {
     if (rc.isHonor && !rc.isYakuhaiTile) parts.push("孤立した役なし字牌で安全に外せます");
-    else if (rc.isolated) parts.push("孤立牌で他の塔子に絡みません");
+    else parts.push("孤立牌で他の塔子に絡みません");
   }
 
   if (rc.doraCount > 0) parts.push(`手にドラ ${rc.doraCount} 枚を残します`);
@@ -229,14 +276,14 @@ function buildReason(rc: ReasonContext): string {
   else if (rc.yp.honitsuSuit !== null) parts.push("混一色を狙えます");
   if (rc.yp.yakuhaiTriplets >= 1) parts.push(`役牌${rc.yp.yakuhaiTriplets}組を確定`);
   else if (rc.yp.yakuhaiPairs >= 1) parts.push("役牌の対子を残しています");
-  if (rc.yp.pinfuLikely && rc.yp.honitsuSuit === null && rc.yp.chinitsuSuit === null) parts.push("平和形に向かいます");
+  if (rc.yp.pinfuLikely && rc.yp.honitsuSuit === null && rc.yp.chinitsuSuit === null)
+    parts.push("平和形に向かいます");
   if (rc.yp.toitoiLikely) parts.push("対々の目があります");
 
   return parts.join("。 ") + "。";
 }
 
 export interface ActionRecommendation {
-  /** main action label (打牌/リーチ/ツモ和了など) */
   action: string;
   tile?: TileId;
   riichi: boolean;
@@ -244,18 +291,10 @@ export interface ActionRecommendation {
   reason: string;
 }
 
-/**
- * Top-level recommendation given a 14-tile hand. Suggests:
- *   - which tile to discard
- *   - whether to declare riichi (when tenpai, closed)
- *   - attack/defense bias (placeholder until opponent model exists)
- */
 export function recommend(
   closed14: TileId[],
   ctx: EvaluatorContext & {
-    isClosed?: boolean;
     canRiichi?: boolean;
-    opponentRiichi?: boolean;
   }
 ): { evaluation: EvaluationResult; recommendation: ActionRecommendation } {
   const evalRes = evaluateDiscards(closed14, ctx);
@@ -263,25 +302,25 @@ export function recommend(
 
   let action = "打牌";
   let riichi = false;
-  let attack: "attack" | "balance" | "defense" = "balance";
+  let attack: "attack" | "balance" | "defense" = evalRes.mode;
   let reason = best.reason;
 
   const becomesTenpai = best.resultingShanten === 0;
   const isClosed = ctx.isClosed ?? true;
   const canRiichi = ctx.canRiichi ?? true;
+  const alreadyRiichi = ctx.alreadyRiichi ?? false;
 
-  if (becomesTenpai && isClosed && canRiichi) {
+  if (
+    becomesTenpai &&
+    isClosed &&
+    canRiichi &&
+    !alreadyRiichi &&
+    evalRes.mode !== "defense" &&
+    best.danger < 0.5
+  ) {
     riichi = true;
     action = "リーチ + 打牌";
-    reason = `テンパイになるためリーチを推奨します。${best.reason}`;
-    attack = "attack";
-  }
-
-  if (ctx.opponentRiichi && evalRes.currentShanten >= 2) {
-    attack = "defense";
-    reason = `相手リーチかつ手が遠い (${evalRes.currentShanten}シャンテン) ため守備寄りに。${best.reason}`;
-  } else if (best.resultingShanten <= 1) {
-    attack = "attack";
+    reason = `テンパイ + 打点期待のためリーチを推奨します。${best.reason}`;
   }
 
   return {
