@@ -29,6 +29,8 @@ npm run selfplay -- 50 42
 npm run tournament -- 40 42
 ```
 
+`tournament` は同じ山 seed を4席ローテーションして、席順・配牌ブレを抑えた4人 no-call ベンチを出します。
+
 ## 画面でできること
 
 - 13 枚の手牌が配られ、ツモ牌が 1 枚増えて 14 枚

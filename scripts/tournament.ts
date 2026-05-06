@@ -5,27 +5,39 @@
  *   - score deltas
  *   - tenpai counts at ryukyoku
  *
- * Agent placement is rotated so seat-bias is averaged out: across N matches we cycle the
- * agents through all 4 seats with a Latin square pattern.
+ * Agent placement is rotated so seat-bias is averaged out. Every block of 4 hands uses
+ * the same wall seed and rotates the 4 agents through all seats.
  *
  * Usage:
  *   npx tsx scripts/tournament.ts [hands] [seed] [agentList]
- *   npm run tournament -- 200 1 random,simple-shanten,attacker,push-fold
+ *   npm run tournament -- 200 1 random,simple-shanten,attacker,world
  */
 
 import { createMatch, playHand, type Agent4 } from "../src/lib/mahjong/match";
 import {
   attackerAgent4,
   balancedAgent4,
+  patientAgent4,
   pushFoldAgent4,
   randomAgent4,
+  riskAwareAgent4,
+  seatAwareAgent4,
   simpleShantenAgent4,
+  solidAgent4,
+  valueAgent4,
+  worldAgent4,
 } from "../src/lib/ai/agents4";
 
 const AGENT_REGISTRY: Record<string, Agent4> = {
   random: randomAgent4,
   "simple-shanten": simpleShantenAgent4,
   attacker: attackerAgent4,
+  "risk-aware": riskAwareAgent4,
+  "seat-aware": seatAwareAgent4,
+  value: valueAgent4,
+  solid: solidAgent4,
+  world: worldAgent4,
+  patient: patientAgent4,
   balanced: balancedAgent4,
   "push-fold": pushFoldAgent4,
 };
@@ -84,7 +96,7 @@ function main() {
         if (!a) throw new Error(`unknown agent: ${n}`);
         return a;
       })
-    : [randomAgent4, simpleShantenAgent4, attackerAgent4, pushFoldAgent4];
+    : [randomAgent4, simpleShantenAgent4, attackerAgent4, worldAgent4];
 
   if (agents.length !== 4) throw new Error("must specify exactly 4 agents");
 
@@ -93,14 +105,17 @@ function main() {
     if (!stats[a.name]) stats[a.name] = defaultStats(a.name);
   }
 
-  // Rotate seat assignments: hand i puts agents[(i+s)%4] at seat s.
+  // Fair rotation: every block of four uses the same wall seed, while each agent
+  // occupies every seat exactly once within that block.
   const t0 = Date.now();
   for (let i = 0; i < handsArg; i++) {
+    const block = Math.floor(i / 4);
+    const rotation = i % 4;
     const seatAgents: Agent4[] = [];
     for (let s = 0; s < 4; s++) {
-      seatAgents.push(agents[(i + s) % 4]);
+      seatAgents.push(agents[(rotation + s) % 4]);
     }
-    const seed = (seedArg * 1_000_003 + i * 7919) & 0x7fffffff;
+    const seed = (seedArg * 1_000_003 + block * 7919) & 0x7fffffff;
     const initial = createMatch(seed);
     const final = playHand(initial, seatAgents);
     const result = final.result!;

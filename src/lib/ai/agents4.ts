@@ -107,6 +107,191 @@ export const attackerAgent4: Agent4 = {
   ...alwaysWin,
 };
 
+/** Offensive evaluator with only the evaluator's light discard-risk penalty enabled. */
+export const riskAwareAgent4: Agent4 = {
+  name: "risk-aware",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+      opponents: buildOpponents(view),
+      ownRiver: view.ownRiver,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = chooseMildRiskCandidate(r.candidates, view);
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi: becomesTenpai && view.ownIsClosed && !view.ownRiichi,
+    };
+  },
+  ...alwaysWin,
+};
+
+/** Offensive evaluator that rewards immediate waits and hand value more than the baseline attacker. */
+export const valueAgent4: Agent4 = {
+  name: "value",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = chooseValueCandidate(r.candidates, view);
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi: becomesTenpai && view.ownIsClosed && !view.ownRiichi,
+    };
+  },
+  ...alwaysWin,
+};
+
+/** Shanten/ukeire-safe attacker: only takes value when it does not give up too much speed. */
+export const solidAgent4: Agent4 = {
+  name: "solid",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = chooseSolidCandidate(r.candidates, view);
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi: becomesTenpai && view.ownIsClosed && !view.ownRiichi,
+    };
+  },
+  ...alwaysWin,
+};
+
+/** World candidate v1: attack-first, with light riichi-risk awareness for top-rate play. */
+export const worldAgent4: Agent4 = {
+  name: "world",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+      opponents: buildOpponents(view),
+      ownRiver: view.ownRiver,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = chooseMildRiskCandidate(r.candidates, view);
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi: becomesTenpai && view.ownIsClosed && !view.ownRiichi,
+    };
+  },
+  ...alwaysWin,
+};
+
+/** Dealer-aware attacker: folds only far hands against dealer riichi. */
+export const seatAwareAgent4: Agent4 = {
+  name: "seat-aware",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const currentShanten = shantenAllFromCounts(tilesToCounts(hand)).shanten;
+    const dealerRiichi = view.seatIndex !== 0 && view.opponentRiichi[0];
+    const shouldFold = dealerRiichi && currentShanten >= 2 && view.junme >= 8;
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: shouldFold ? "defense" : "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+      opponents: shouldFold ? buildOpponents(view) : undefined,
+      ownRiver: shouldFold ? view.ownRiver : undefined,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = r.best;
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi:
+        becomesTenpai &&
+        view.ownIsClosed &&
+        !view.ownRiichi &&
+        r.mode !== "defense",
+    };
+  },
+  ...alwaysWin,
+};
+
+/** Attacker that can defer riichi on weak early tenpai to keep improving the shape. */
+export const patientAgent4: Agent4 = {
+  name: "patient",
+  decideDiscard(view) {
+    const locked = riichiTsumogiri(view);
+    if (locked) return locked;
+    const hand = fullHand(view);
+    const ctx: EvaluatorContext = {
+      doraTiles: view.doraTiles,
+      seenCounts: view.seenCounts,
+      roundWind: view.roundWind,
+      seatWind: view.seatWind,
+      junme: view.junme,
+      mode: "attack",
+      isClosed: view.ownIsClosed,
+      alreadyRiichi: view.ownRiichi,
+    };
+    const r = evaluateDiscards(hand, ctx);
+    const best = r.best;
+    const becomesTenpai = best.resultingShanten === 0;
+    return {
+      tile: best.tile,
+      riichi:
+        becomesTenpai &&
+        view.ownIsClosed &&
+        !view.ownRiichi &&
+        shouldDeclareRiichi(best, view),
+    };
+  },
+  ...alwaysWin,
+};
+
 /** Full evaluator in auto (balance/defense) mode. */
 export const balancedAgent4: Agent4 = {
   name: "balanced",
@@ -185,9 +370,97 @@ export const ALL_AGENTS_4: Agent4[] = [
   randomAgent4,
   simpleShantenAgent4,
   attackerAgent4,
+  riskAwareAgent4,
+  valueAgent4,
+  solidAgent4,
+  worldAgent4,
+  seatAwareAgent4,
+  patientAgent4,
   balancedAgent4,
   pushFoldAgent4,
 ];
+
+function chooseMildRiskCandidate(
+  candidates: ReturnType<typeof evaluateDiscards>["candidates"],
+  view: PlayerView
+) {
+  const opponentRiichiCount = view.opponentRiichi.filter((b, i) => i !== view.seatIndex && b).length;
+  if (opponentRiichiCount === 0) return candidates[0];
+
+  let best = candidates[0];
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    const riskWeight =
+      c.resultingShanten <= 1
+        ? 600
+        : c.resultingShanten === 2
+          ? 3500
+          : 7000;
+    const score = c.score - c.danger * riskWeight * opponentRiichiCount;
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function chooseValueCandidate(
+  candidates: ReturnType<typeof evaluateDiscards>["candidates"],
+  view: PlayerView
+) {
+  let best = candidates[0];
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    const waitBonus = c.resultingShanten === 0 ? c.ukeireCount * 120 + c.ukeireKinds * 80 : 0;
+    const valueBonus = c.hanPotential * 220 + c.doraCount * 180;
+    const lateSpeedBonus = view.junme >= 12 && c.resultingShanten <= 1 ? c.ukeireCount * 45 : 0;
+    const score = c.score + waitBonus + valueBonus + lateSpeedBonus;
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function chooseSolidCandidate(
+  candidates: ReturnType<typeof evaluateDiscards>["candidates"],
+  view: PlayerView
+) {
+  const bestShanten = Math.min(...candidates.map((c) => c.resultingShanten));
+  const sameShanten = candidates.filter((c) => c.resultingShanten === bestShanten);
+  const maxUkeire = Math.max(...sameShanten.map((c) => c.ukeireCount));
+  const tolerance = bestShanten === 0 ? 2 : view.junme >= 12 ? 3 : 6;
+  const viable = sameShanten.filter((c) => c.ukeireCount >= maxUkeire - tolerance);
+
+  let best = viable[0];
+  let bestScore = -Infinity;
+  for (const c of viable) {
+    const score =
+      c.score +
+      c.ukeireCount * 35 +
+      c.ukeireKinds * 20 +
+      c.hanPotential * 120 +
+      c.doraCount * 100;
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function shouldDeclareRiichi(
+  c: ReturnType<typeof evaluateDiscards>["best"],
+  view: PlayerView
+): boolean {
+  const value = c.hanPotential + c.doraCount;
+  if (view.junme >= 10) return true;
+  if (c.ukeireCount >= 6) return true;
+  if (value >= 2) return true;
+  return false;
+}
 
 function riichiTsumogiri(view: PlayerView): { tile: TileId; riichi: boolean } | null {
   if (!view.ownRiichi || view.ownDrawn === null) return null;

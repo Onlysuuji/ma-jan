@@ -23,7 +23,8 @@
 - `evaluateDiscards` が打牌候補をスコアリングする
 - `src/lib/ai/defense.ts` に現物 / スジ / 壁 / 字牌見え枚数の危険度評価がある
 - `src/lib/mahjong/match.ts` に4人 no-call 対局がある
-- `scripts/tournament.ts` で random / simple-shanten / attacker / push-fold を比較できる
+- `scripts/tournament.ts` で random / simple-shanten / attacker / world を比較できる
+- 4人ベンチは同じ山を4席ローテーションして、席順・配牌ブレを抑える
 - リーチ後は対局エンジン側でツモ切りを強制する
 - `npm test` は12件
 
@@ -35,22 +36,24 @@
 - simple-shanten: tenpai 70.0%, agari 24.0%, avg final shanten 0.08
 - current: tenpai 66.0%, agari 32.0%, avg final shanten 0.04
 
-`npm run tournament -- 40 42`
+`npm run tournament -- 200 42`
 
-- random: win 0.0%, deal-in 22.5%, avgRank 3.00, avgScore -1928
-- simple-shanten: win 30.0%, deal-in 12.5%, avgRank 2.27, avgScore 830
-- attacker: win 32.5%, deal-in 5.0%, avgRank 2.25, avgScore 833
-- push-fold: win 17.5%, deal-in 7.5%, avgRank 2.48, avgScore 265
+- random: win 0.0%, deal-in 26.5%, avgRank 3.08, avgScore -2129
+- simple-shanten: win 24.0%, deal-in 12.5%, avgRank 2.40, avgScore 338
+- attacker: win 31.5%, deal-in 8.0%, avgRank 2.25, avgScore 1086
+- world: win 31.0%, deal-in 13.5%, avgRank 2.27, avgScore 706
+
+`world` v1 はツモ率を上げますが、200局では `attacker` が勝率・平均順位・平均収支で上です。
 
 ### 次の仕事
 
-`TODO.md` の P0 を上から進めてください。最優先は **4人ベンチで `attacker` を上回る新エージェント** です。
+`TODO.md` の P0 を上から進めてください。最優先は **4人ベンチで `world` が `attacker` を上回る調整** です。
 
 候補:
 
 1. 1シャンテン押し引きの改善
    - 相手リーチ人数、巡目、打点、受け入れ枚数、待ち質を統合
-   - `push-fold` は守りすぎ、`attacker` は押しすぎなので、その中間を探す
+   - `world` はラス回避は良いが平均収支が足りないので、勝ち切る押しを増やす
 2. モンテカルロ探索
    - 各打牌候補から1〜2手先をサンプル
    - 期待和了率と放銃期待値を `evaluateDiscards` の score に統合
