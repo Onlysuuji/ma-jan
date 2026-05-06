@@ -2,12 +2,20 @@ import { NUM_TILES, type TileId } from "./types";
 import { sortTiles, tilesToCounts, doraFromIndicator } from "./tiles";
 import { Mulberry32, buildWall, shuffle } from "./wall";
 import { isWin, isFuriten, waitingTiles } from "./win";
+import { isYakuhai } from "./score";
 import { detectYaku, type YakuResult } from "./yaku";
 import { shantenAllFromCounts } from "./shanten";
+
+export interface MatchMeld {
+  kind: "pon";
+  tiles: TileId[];
+  fromSeat: number;
+}
 
 export interface MatchPlayer {
   closed: TileId[];          // sorted, length 13 (pre-draw) or 14 (post-draw, with drawn)
   drawn: TileId | null;
+  melds: MatchMeld[];
   river: TileId[];
   riichi: boolean;
   riichiJunme: number;       // -1 if not declared
@@ -49,6 +57,7 @@ export type MatchEvent =
   | { kind: "deal"; seed: number }
   | { kind: "draw"; player: number; tile: TileId; junme: number }
   | { kind: "discard"; player: number; tile: TileId; riichi: boolean; junme: number }
+  | { kind: "pon"; player: number; fromSeat: number; tile: TileId; discard: TileId; junme: number }
   | { kind: "tsumo"; player: number; yaku: YakuResult }
   | { kind: "ron"; winner: number; loser: number; tile: TileId; yaku: YakuResult }
   | { kind: "ryukyoku"; tenpai: boolean[] };
@@ -70,10 +79,12 @@ export interface PlayerView {
   ownClosed: TileId[];      // 13 tiles
   ownDrawn: TileId | null;  // current draw, null after discard
   ownRiver: TileId[];
+  ownMelds: MatchMeld[];
   ownRiichi: boolean;
   ownRiichiJunme: number;
   ownIsClosed: boolean;
   opponentRivers: TileId[][]; // 4-length, opponentRivers[seatIndex] = own
+  opponentMelds: MatchMeld[][];
   opponentRiichi: boolean[];
   opponentRiichiJunme: number[];
   doraIndicators: TileId[];
@@ -90,6 +101,8 @@ export interface Agent4 {
   name: string;
   /** Choose which tile to discard, and whether to declare riichi. */
   decideDiscard(view: PlayerView): { tile: TileId; riichi: boolean };
+  /** Decide whether to pon a discard. Return the post-call discard tile when calling. */
+  decidePon(view: PlayerView, tile: TileId, fromSeat: number): { call: boolean; discard?: TileId };
   /** Decide whether to declare a tsumo win (only called if win is legal). */
   decideTsumo(view: PlayerView, winTile: TileId, yaku: YakuResult): boolean;
   /** Decide whether to declare a ron (only called if win is legal). */
@@ -103,6 +116,7 @@ export function createMatch(seed: number, dealer = 0): MatchState {
   const players: MatchPlayer[] = Array.from({ length: 4 }, () => ({
     closed: [],
     drawn: null,
+    melds: [],
     river: [],
     riichi: false,
     riichiJunme: -1,
@@ -159,10 +173,12 @@ export function makeView(state: MatchState, seat: number): PlayerView {
     ownClosed: p.closed.slice(),
     ownDrawn: p.drawn,
     ownRiver: p.river.slice(),
+    ownMelds: p.melds.map((m) => ({ ...m, tiles: m.tiles.slice() })),
     ownRiichi: p.riichi,
     ownRiichiJunme: p.riichiJunme,
     ownIsClosed: p.isClosed,
     opponentRivers: state.players.map((q) => q.river.slice()),
+    opponentMelds: state.players.map((q) => q.melds.map((m) => ({ ...m, tiles: m.tiles.slice() }))),
     opponentRiichi: state.players.map((q) => q.riichi),
     opponentRiichiJunme: state.players.map((q) => q.riichiJunme),
     doraIndicators: state.doraIndicators.slice(),
@@ -176,8 +192,14 @@ export function makeView(state: MatchState, seat: number): PlayerView {
 }
 
 /** Convert tenpai shanten to bool for ryukyoku checks. */
-function isTenpaiNow(closed: TileId[]): boolean {
-  return shantenAllFromCounts(tilesToCounts(closed)).shanten <= 0;
+function isTenpaiNow(player: MatchPlayer): boolean {
+  if (player.melds.length === 0) {
+    return shantenAllFromCounts(tilesToCounts(player.closed)).shanten <= 0;
+  }
+  for (let id = 0; id < NUM_TILES; id++) {
+    if (completeWithOpenMelds([...player.closed, id], player.melds.length)) return true;
+  }
+  return false;
 }
 
 /**
@@ -201,7 +223,7 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
 
   // Out of wall → ryukyoku
   if (state.wallIdx >= state.wall.length) {
-    const tenpai = state.players.map((p) => isTenpaiNow(p.closed));
+    const tenpai = state.players.map((p) => isTenpaiNow(p));
     const tenpaiCount = tenpai.filter(Boolean).length;
     const deltas = computeNoTenDeltas(tenpai);
     return {
@@ -226,12 +248,9 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
 
   // Tsumo check
   const candidate14 = sortTiles([...player.closed, drawnTile]);
-  if (isWin(candidate14)) {
-    const yaku = detectYaku({
-      closed14: candidate14,
-      agariTile: drawnTile,
+  if (isWinForPlayer(candidate14, player)) {
+    const yaku = detectYakuForPlayer(player, candidate14, drawnTile, {
       isTsumo: true,
-      isClosed: player.isClosed,
       isRiichi: player.riichi,
       isIppatsu: player.riichi && player.ippatsu,
       isHaitei: newWallIdx === state.wall.length,
@@ -309,14 +328,11 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
     const oppSeat = (seat + i) % 4;
     const opp = state.players[oppSeat];
     const oppHand = sortTiles([...opp.closed, discardTile]);
-    if (!isWin(oppHand)) continue;
-    if (isFuriten(opp.closed, opp.river)) continue;
+    if (!isWinForPlayer(oppHand, opp)) continue;
+    if (opp.melds.length === 0 && isFuriten(opp.closed, opp.river)) continue;
     // Riichi-imposed furiten not modeled deeply; basic furiten only
-    const yaku = detectYaku({
-      closed14: oppHand,
-      agariTile: discardTile,
+    const yaku = detectYakuForPlayer(opp, oppHand, discardTile, {
       isTsumo: false,
-      isClosed: opp.isClosed,
       isRiichi: opp.riichi,
       isIppatsu: opp.riichi && opp.ippatsu,
       isHaitei: false,
@@ -341,6 +357,54 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
         log: [...log, { kind: "ron", winner: oppSeat, loser: seat, tile: discardTile, yaku }],
       };
     }
+  }
+
+  // Pon: v1 only supports pon calls, with AI expected to use this primarily for yakuhai.
+  for (let i = 1; i <= 3; i++) {
+    const callerSeat = (seat + i) % 4;
+    const caller = state.players[callerSeat];
+    if (caller.riichi || caller.closed.filter((t) => t === discardTile).length < 2) continue;
+    const callView = makeView({ ...state, wallIdx: newWallIdx }, callerSeat);
+    const call = agents[callerSeat].decidePon(callView, discardTile, seat);
+    if (!call.call || call.discard === undefined) continue;
+
+    caller.closed = removeOnce(removeOnce(caller.closed, discardTile), discardTile);
+    caller.melds.push({ kind: "pon", tiles: [discardTile, discardTile, discardTile], fromSeat: seat });
+    caller.isClosed = false;
+    state.seenCounts[discardTile] += 2;
+    const discardAfterPon = caller.closed.includes(call.discard) ? call.discard : caller.closed[0];
+    caller.closed = sortTiles(removeOnce(caller.closed, discardAfterPon));
+    caller.river.push(discardAfterPon);
+    state.seenCounts[discardAfterPon]++;
+
+    for (const p of state.players) p.ippatsu = false;
+
+    const nextSeatAfterCall = (callerSeat + 1) % 4;
+    const nextJunmeAfterCall = nextSeatAfterCall === state.dealer ? state.junme + 1 : state.junme;
+    return {
+      ...state,
+      wallIdx: newWallIdx,
+      currentPlayer: nextSeatAfterCall,
+      junme: nextJunmeAfterCall,
+      log: [
+        ...log,
+        {
+          kind: "pon",
+          player: callerSeat,
+          fromSeat: seat,
+          tile: discardTile,
+          discard: discardAfterPon,
+          junme: state.junme,
+        },
+        {
+          kind: "discard",
+          player: callerSeat,
+          tile: discardAfterPon,
+          riichi: false,
+          junme: state.junme,
+        },
+      ],
+    };
   }
 
   // Cancel all opponents' ippatsu after this discard (anyone who'd previously declared riichi loses ippatsu after a single round)
@@ -374,6 +438,107 @@ function removeOnce<T>(arr: T[], val: T): T[] {
   const idx = out.indexOf(val);
   if (idx >= 0) out.splice(idx, 1);
   return out;
+}
+
+function isWinForPlayer(closedWithAgari: TileId[], player: MatchPlayer): boolean {
+  if (player.melds.length === 0) return isWin(closedWithAgari);
+  return completeWithOpenMelds(closedWithAgari, player.melds.length);
+}
+
+function completeWithOpenMelds(closedWithAgari: TileId[], openMeldCount: number): boolean {
+  const neededClosedTiles = 14 - openMeldCount * 3;
+  if (closedWithAgari.length !== neededClosedTiles) return false;
+  const counts = tilesToCounts(closedWithAgari);
+  const setsNeeded = 4 - openMeldCount;
+  for (let pair = 0; pair < NUM_TILES; pair++) {
+    if (counts[pair] < 2) continue;
+    counts[pair] -= 2;
+    if (canRemoveSets(counts, setsNeeded, new Map())) {
+      counts[pair] += 2;
+      return true;
+    }
+    counts[pair] += 2;
+  }
+  return false;
+}
+
+function canRemoveSets(counts: number[], setsLeft: number, memo: Map<string, boolean>): boolean {
+  if (setsLeft === 0) return counts.every((c) => c === 0);
+  const key = `${setsLeft}:${counts.join(",")}`;
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+  const first = counts.findIndex((c) => c > 0);
+  if (first < 0) return setsLeft === 0;
+
+  if (counts[first] >= 3) {
+    counts[first] -= 3;
+    if (canRemoveSets(counts, setsLeft - 1, memo)) {
+      counts[first] += 3;
+      memo.set(key, true);
+      return true;
+    }
+    counts[first] += 3;
+  }
+
+  const r = first % 9;
+  if (first < 27 && r <= 6 && counts[first + 1] > 0 && counts[first + 2] > 0) {
+    counts[first]--;
+    counts[first + 1]--;
+    counts[first + 2]--;
+    if (canRemoveSets(counts, setsLeft - 1, memo)) {
+      counts[first]++;
+      counts[first + 1]++;
+      counts[first + 2]++;
+      memo.set(key, true);
+      return true;
+    }
+    counts[first]++;
+    counts[first + 1]++;
+    counts[first + 2]++;
+  }
+
+  memo.set(key, false);
+  return false;
+}
+
+function detectYakuForPlayer(
+  player: MatchPlayer,
+  closedWithAgari: TileId[],
+  agariTile: TileId,
+  input: Omit<Parameters<typeof detectYaku>[0], "closed14" | "agariTile" | "isClosed">
+): YakuResult {
+  if (player.melds.length === 0) {
+    return detectYaku({
+      ...input,
+      closed14: closedWithAgari,
+      agariTile,
+      isClosed: player.isClosed,
+    });
+  }
+
+  const yaku = [];
+  for (const meld of player.melds) {
+    const t = meld.tiles[0];
+    if (isYakuhai(t, input.roundWind, input.seatWind)) {
+      yaku.push({ name: "役牌(副露)", han: 1 });
+    }
+  }
+  const allTiles = [...closedWithAgari, ...player.melds.flatMap((m) => m.tiles)];
+  for (const d of input.doraTiles) {
+    const dora = allTiles.filter((t) => t === d).length;
+    if (dora > 0) yaku.push({ name: "ドラ", han: dora });
+  }
+  const hanTotal = yaku.reduce((sum, item) => sum + item.han, 0);
+  const hasYaku = yaku.some((item) => !item.name.startsWith("ドラ"));
+  return {
+    yaku,
+    hanTotal,
+    hasYaku,
+    yakumanCount: 0,
+    decomposition: null,
+    isChiitoi: false,
+    isKokushi: false,
+  };
 }
 
 /** Score deltas (point change per seat) for a tsumo win. */

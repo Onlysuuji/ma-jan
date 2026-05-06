@@ -5,6 +5,7 @@ import type {
 import { NUM_TILES, TILES_PER_KIND, type TileId } from "../mahjong/types";
 import type { YakuResult } from "../mahjong/yaku";
 import { sortTiles, tilesToCounts } from "../mahjong/tiles";
+import { countDora, isYakuhai } from "../mahjong/score";
 import { shantenAllFromCounts } from "../mahjong/shanten";
 import { ukeireFromCounts } from "../mahjong/ukeire";
 import { evaluateDiscards, type EvaluatorContext } from "./evaluator";
@@ -30,6 +31,7 @@ function fullHand(view: PlayerView): TileId[] {
 
 /** Always wins when offered (tsumo/ron). */
 const alwaysWin = {
+  decidePon: (_v: PlayerView, _t: TileId, _f: number) => ({ call: false }),
   decideTsumo: (_v: PlayerView, _t: TileId, _y: YakuResult) => true,
   decideRon: (_v: PlayerView, _t: TileId, _f: number, _y: YakuResult) => true,
 };
@@ -87,6 +89,7 @@ export const attackerAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -114,6 +117,7 @@ export const riskAwareAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -144,6 +148,7 @@ export const valueAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -172,6 +177,7 @@ export const solidAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -196,10 +202,23 @@ export const solidAgent4: Agent4 = {
 /** World candidate: attack-first, then push/fold by shanten, value, wait quality, and discard danger. */
 export const worldAgent4: Agent4 = {
   name: "world",
+  ...alwaysWin,
+  decidePon(view, tile, _fromSeat) {
+    if (view.ownRiichi) return { call: false };
+    if (!isYakuhai(tile, view.roundWind, view.seatWind)) return { call: false };
+    if (view.ownClosed.filter((t) => t === tile).length < 2) return { call: false };
+    const currentShanten = shantenAllFromCounts(tilesToCounts(view.ownClosed)).shanten;
+    if (currentShanten <= 0) return { call: false };
+
+    const afterCall = removeOnce(removeOnce(view.ownClosed, tile), tile);
+    const discard = choosePostPonDiscard(afterCall, view);
+    return { call: true, discard };
+  },
   decideDiscard(view) {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -224,7 +243,6 @@ export const worldAgent4: Agent4 = {
         shouldDeclareWorldRiichi(best, view),
     };
   },
-  ...alwaysWin,
 };
 
 /** Dealer-aware attacker: folds only far hands against dealer riichi. */
@@ -234,6 +252,7 @@ export const seatAwareAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const currentShanten = shantenAllFromCounts(tilesToCounts(hand)).shanten;
     const dealerRiichi = view.seatIndex !== 0 && view.opponentRiichi[0];
     const shouldFold = dealerRiichi && currentShanten >= 2 && view.junme >= 8;
@@ -271,6 +290,7 @@ export const patientAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -303,6 +323,7 @@ export const balancedAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const ctx: EvaluatorContext = {
       doraTiles: view.doraTiles,
       seenCounts: view.seenCounts,
@@ -337,6 +358,7 @@ export const pushFoldAgent4: Agent4 = {
     const locked = riichiTsumogiri(view);
     if (locked) return locked;
     const hand = fullHand(view);
+    if (view.ownMelds.length > 0) return { tile: chooseOpenHandDiscard(hand, view), riichi: false };
     const currentShanten = shantenAllFromCounts(tilesToCounts(hand)).shanten;
     const opponentRiichi = view.opponentRiichi.some((b, i) => i !== view.seatIndex && b);
     const mode =
@@ -620,6 +642,48 @@ function shouldDeclareWorldRiichi(
   }
   if (view.junme <= 6 && !goodWait && value === 0) return false;
   return shouldDeclareRiichi(c, view);
+}
+
+function choosePostPonDiscard(tiles11: TileId[], view: PlayerView): TileId {
+  return chooseOpenHandDiscard(tiles11, view);
+}
+
+function chooseOpenHandDiscard(tiles: TileId[], view: PlayerView): TileId {
+  let best = tiles[0];
+  let bestScore = Infinity;
+  for (const tile of new Set(tiles)) {
+    const remaining = removeOnce(tiles, tile);
+    const dora = countDora([tile], view.doraTiles);
+    let score = 0;
+    score += isYakuhai(tile, view.roundWind, view.seatWind) ? 900 : 0;
+    score += dora * 700;
+    score += keepsPair(tile, remaining) ? 180 : 0;
+    score += neighborCount(tile, remaining) * 90;
+    score -= tile >= 27 ? 80 : 0;
+    score -= tile % 9 === 0 || tile % 9 === 8 ? 30 : 0;
+    if (score < bestScore) {
+      best = tile;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function keepsPair(tile: TileId, tiles: TileId[]): boolean {
+  return tiles.filter((t) => t === tile).length >= 2;
+}
+
+function neighborCount(tile: TileId, tiles: TileId[]): number {
+  if (tile >= 27) return 0;
+  let n = 0;
+  for (const other of tiles) {
+    if (other >= 27) continue;
+    if (Math.floor(other / 9) !== Math.floor(tile / 9)) continue;
+    const d = Math.abs((other % 9) - (tile % 9));
+    if (d === 1) n += 2;
+    else if (d === 2) n += 1;
+  }
+  return n;
 }
 
 function riichiTsumogiri(view: PlayerView): { tile: TileId; riichi: boolean } | null {

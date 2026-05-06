@@ -41,6 +41,7 @@ test("riichi player is forced to tsumogiri", () => {
   const illegalHandChangeAgent = {
     name: "illegal",
     decideDiscard: () => ({ tile: state.players[0].closed[0], riichi: false }),
+    decidePon: () => ({ call: false }),
     decideTsumo: () => false,
     decideRon: () => false,
   };
@@ -56,4 +57,39 @@ test("riichi player is forced to tsumogiri", () => {
     throw new Error("expected a discard event");
   }
   assert.equal(discard.tile, drawn);
+});
+
+test("yakuhai pon opens the caller and advances after the call discard", () => {
+  const state = createMatch(99);
+  state.currentPlayer = 0;
+  state.wall = [0, ...state.wall.slice(1)];
+  state.wallIdx = 0;
+  state.players[0].closed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 31];
+  state.players[1].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 31, 31];
+  state.players[2].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  state.players[3].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+  const baseAgent = {
+    name: "base",
+    decideDiscard: () => ({ tile: 31, riichi: false }),
+    decidePon: () => ({ call: false }),
+    decideTsumo: () => false,
+    decideRon: () => false,
+  };
+  const ponAgent = {
+    ...baseAgent,
+    name: "pon",
+    decideDiscard: () => ({ tile: 0, riichi: false }),
+    decidePon: () => ({ call: true, discard: 0 }),
+  };
+
+  const final = stepHand(state, [baseAgent, ponAgent, baseAgent, baseAgent]);
+  const pon = final.log.find((ev) => ev.kind === "pon");
+
+  assert.ok(pon);
+  assert.equal(final.players[1].isClosed, false);
+  assert.equal(final.players[1].melds.length, 1);
+  assert.deepEqual(final.players[1].melds[0].tiles, [31, 31, 31]);
+  assert.equal(final.players[1].closed.length, 10);
+  assert.equal(final.currentPlayer, 2);
 });

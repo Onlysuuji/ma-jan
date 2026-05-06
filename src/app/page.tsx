@@ -37,6 +37,7 @@ const WIND_LABELS = ["", "東", "南", "西", "北"];
 const passAgent: Agent4 = {
   name: "human-pass",
   decideDiscard: () => ({ tile: -1, riichi: false }),
+  decidePon: () => ({ call: false }),
   decideTsumo: () => true,
   decideRon: () => true,
 };
@@ -213,8 +214,15 @@ function FourPlayerView() {
   }, [humanHand14, state]);
 
   const runAiUntilHuman = useCallback(() => {
-    setState((s) => advanceWithAiControl(s, seatModes));
-  }, [seatModes]);
+    const expectedPlayer = state.currentPlayer;
+    const expectedWallIdx = state.wallIdx;
+    setState((s) => {
+      if (s.finished) return s;
+      if (s.currentPlayer !== expectedPlayer || s.wallIdx !== expectedWallIdx) return s;
+      const first = stepHand(s, buildAgents(seatModes, -1, undefined, true));
+      return advanceUntilHuman(first, seatModes);
+    });
+  }, [seatModes, state.currentPlayer, state.wallIdx]);
 
   const handleNewMatch = useCallback(() => {
     const nextSeed = seed + 1;
@@ -228,14 +236,18 @@ function FourPlayerView() {
 
   const handleHumanDiscard = useCallback(
     (tile: TileId, riichi = false) => {
+      const expectedPlayer = state.currentPlayer;
+      const expectedWallIdx = state.wallIdx;
       setState((s) => {
         if (s.finished) return s;
+        if (s.currentPlayer !== expectedPlayer || s.wallIdx !== expectedWallIdx) return s;
+        if (seatModes[s.currentPlayer] !== "assist") return s;
         const agents = buildAgents(seatModes, s.currentPlayer, { tile, riichi });
         const next = stepHand(s, agents);
         return advanceUntilHuman(next, seatModes);
       });
     },
-    [seatModes]
+    [seatModes, state.currentPlayer, state.wallIdx]
   );
 
   const handleAiRecommended = useCallback(() => {
@@ -543,12 +555,6 @@ function advanceUntilHuman(state: MatchState, seatModes: SeatMode[]): MatchState
   return cur;
 }
 
-function advanceWithAiControl(state: MatchState, seatModes: SeatMode[]): MatchState {
-  if (state.finished) return state;
-  const first = stepHand(state, buildAgents(seatModes, -1, undefined, true));
-  return advanceUntilHuman(first, seatModes);
-}
-
 function buildAgents(
   seatModes: SeatMode[],
   humanSeat: number,
@@ -620,6 +626,8 @@ function eventText(ev: MatchState["log"][number]): string {
       return `${SEAT_NAMES[ev.player]} ツモ`;
     case "discard":
       return `${SEAT_NAMES[ev.player]} 打 ${tileDisplay(ev.tile)}${ev.riichi ? " リーチ" : ""}`;
+    case "pon":
+      return `${SEAT_NAMES[ev.player]} ポン (${tileDisplay(ev.tile)}) → 打 ${tileDisplay(ev.discard)}`;
     case "tsumo":
       return `${SEAT_NAMES[ev.player]} ツモ和了`;
     case "ron":
