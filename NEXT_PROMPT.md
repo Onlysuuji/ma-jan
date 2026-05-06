@@ -20,7 +20,12 @@
 
 `TODO.md` の **P0 セクション** を上から順に実装してください。次の 1 個を完了させてからコミットして停止しても OK ですが、可能なら複数進めてください。
 
-最優先は「**自己対戦スクリプト** (`scripts/selfplay.ts`)」です。ランダム AI / 単純シャンテン AI / 現行 AI の 3 つを定義し、N 局回して「平均シャンテン推移・テンパイ到達率・(可能なら) 和了率」を比較する CLI を作ります。tsx で実行できるようにし、`npm run selfplay` を package.json に追加してください。これがあれば AI 強化が客観評価できます。
+`scripts/selfplay.ts` は既に動きます。`npm run selfplay -- 200` で random / simple-shanten / current の 3 エージェントを比較できます。**新しい AI ロジックを足したら必ず selfplay で agari% / tenpai% が向上したことを確認**してから commit してください。
+
+最優先は次の 2 つです:
+
+1. **守備 AI の最低限版**: 相手河の現銃 (genbutsu) を `evaluator.ts` の `estimateSafety` に組み込み、selfplay にダミーの "相手リーチ風河" モードを追加して放銃 (相手の待ち牌を捨てた局数) を測る。
+2. **モンテカルロ探索 (1〜2 手先)**: 各打牌候補から残り山をランダムサンプルし、期待 ukeire / 和了確率を score に加える。selfplay の agari% で効果検証。
 
 ### 守るべきルール
 
