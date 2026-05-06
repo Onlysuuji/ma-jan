@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Hand } from "@/components/Hand";
 import { River } from "@/components/River";
 import { GameInfo } from "@/components/GameInfo";
@@ -42,6 +42,11 @@ const passAgent: Agent4 = {
 
 export default function Page() {
   const [mode, setMode] = useState<ScreenMode>("trainer");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <div className="container">
@@ -67,7 +72,13 @@ export default function Page() {
           </button>
         </div>
       </div>
-      {mode === "trainer" ? <TrainerView /> : <FourPlayerView />}
+      {mounted ? (
+        mode === "trainer" ? <TrainerView /> : <FourPlayerView />
+      ) : (
+        <div className="panel">
+          <p className="muted">Loading...</p>
+        </div>
+      )}
     </div>
   );
 }
