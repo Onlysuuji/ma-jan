@@ -184,9 +184,9 @@ export function evaluateDiscards(
     notes.push("国士無双が有利な形です。");
   }
   if (mode === "defense") {
-    notes.push("守備優先モードです (相手リーチかつ手が遠い)。");
+    notes.push("守備優先モードです (相手リーチに対して安牌の棚を優先)。");
   } else if (mode === "balance") {
-    notes.push("攻守バランスモードです (相手リーチに対し押し引き)。");
+    notes.push("攻守バランスモードです (速度と打点の天秤で押し引き)。");
   }
 
   return {
@@ -242,7 +242,7 @@ function buildReason(rc: ReasonContext): string {
   const parts: string[] = [];
   const name = tileDisplay(rc.tile);
   if (rc.mode === "defense") {
-    parts.push(`守備優先: ${name} の危険度 ${rc.danger.toFixed(2)}`);
+    parts.push(`安牌の棚: ${name} の危険度 ${rc.danger.toFixed(2)}`);
     if (rc.danger === 0) parts.push("現物で安全");
     else if (rc.danger < 0.2) parts.push("ほぼ安牌");
     else if (rc.danger < 0.5) parts.push("中程度の危険");
@@ -252,14 +252,14 @@ function buildReason(rc: ReasonContext): string {
   }
 
   if (rc.newShanten < rc.currentShanten) {
-    parts.push(`${name}を切るとシャンテンが進みます (${rc.currentShanten} → ${rc.newShanten})`);
+    parts.push(`手牌の骨格を進める ${name} 切り (${rc.currentShanten} → ${rc.newShanten})`);
   } else if (rc.newShanten === rc.currentShanten) {
-    parts.push(`${name}を切ってもシャンテンは維持されます (${rc.newShanten})`);
+    parts.push(`手牌の骨格を崩さず ${name} を切れます (${rc.newShanten})`);
   } else {
-    parts.push(`${name}を切るとシャンテンが後退します (${rc.currentShanten} → ${rc.newShanten})`);
+    parts.push(`${name}を切ると手牌の骨格が後退します (${rc.currentShanten} → ${rc.newShanten})`);
   }
 
-  parts.push(`受け入れ ${rc.ukeireCount} 枚 / ${rc.ukeireKinds} 種`);
+  parts.push(`速度の材料: 受け入れ ${rc.ukeireCount} 枚 / ${rc.ukeireKinds} 種`);
 
   if (rc.danger > 0.5) parts.push(`危険度 ${rc.danger.toFixed(2)}`);
   else if (rc.danger > 0.2) parts.push(`やや危険 (${rc.danger.toFixed(2)})`);
@@ -269,7 +269,7 @@ function buildReason(rc: ReasonContext): string {
     else parts.push("孤立牌で他の塔子に絡みません");
   }
 
-  if (rc.doraCount > 0) parts.push(`手にドラ ${rc.doraCount} 枚を残します`);
+  if (rc.doraCount > 0) parts.push(`打点の芯としてドラ ${rc.doraCount} 枚を残します`);
 
   if (rc.yp.tanyao) parts.push("タンヤオの目があります");
   if (rc.yp.chinitsuSuit !== null) parts.push("清一色を狙えます");

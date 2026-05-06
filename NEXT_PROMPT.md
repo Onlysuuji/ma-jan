@@ -2,6 +2,34 @@
 
 ## 2026-05-07 作業メモ
 
+### AI作業メモ
+
+今回追加:
+
+1. `world` に待ち質、1向聴の骨格、巡目、打点、相手リーチ人数を使う押し引き評価を追加
+2. 平場の上位候補に軽量1手先サンプルを入れ、次ツモ後の最良シャンテン進行を評価
+3. AI推奨理由に「安牌の棚」「手牌の骨格」「速度と打点の天秤」を反映
+
+確認済み:
+
+- `npm run build`
+- `npm test`
+- `npm run selfplay -- 50 42`
+- `npm run tournament -- 80 42 random,simple-shanten,attacker,world`
+- `npm run tournament -- 200 42 random,simple-shanten,attacker,world`
+
+80局 seed=42:
+
+- attacker: win 27.5%, deal-in 10.0%, avgRank 2.31, avgScore 584
+- world: win 35.0%, deal-in 15.0%, avgRank 2.19, avgScore 976
+
+200局 seed=42:
+
+- attacker: win 32.5%, deal-in 8.5%, avgRank 2.27, avgScore 1077
+- world: win 28.5%, deal-in 12.0%, avgRank 2.25, avgScore 783
+
+結論: `world` は80局では `attacker` を上回るが、200局では平均順位/ラス率のみ上回り、勝率/平均収支は未達。次はリーチ前の攻撃力を落とさず、リーチ後の放銃率を `attacker` 近くまで下げる。
+
 今回完了:
 
 1. 4人対戦で終局後に全員の手牌が自動公開されるようにした

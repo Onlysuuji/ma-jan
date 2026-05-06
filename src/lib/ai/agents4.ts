@@ -2,7 +2,7 @@ import type {
   Agent4,
   PlayerView,
 } from "../mahjong/match";
-import type { TileId } from "../mahjong/types";
+import { NUM_TILES, TILES_PER_KIND, type TileId } from "../mahjong/types";
 import type { YakuResult } from "../mahjong/yaku";
 import { sortTiles, tilesToCounts } from "../mahjong/tiles";
 import { shantenAllFromCounts } from "../mahjong/shanten";
@@ -193,7 +193,7 @@ export const solidAgent4: Agent4 = {
   ...alwaysWin,
 };
 
-/** World candidate v1: attack-first, with light riichi-risk awareness for top-rate play. */
+/** World candidate: attack-first, then push/fold by shanten, value, wait quality, and discard danger. */
 export const worldAgent4: Agent4 = {
   name: "world",
   decideDiscard(view) {
@@ -213,11 +213,15 @@ export const worldAgent4: Agent4 = {
       ownRiver: view.ownRiver,
     };
     const r = evaluateDiscards(hand, ctx);
-    const best = chooseMildRiskCandidate(r.candidates, view);
+    const best = chooseWorldCandidate(r.candidates, view, hand);
     const becomesTenpai = best.resultingShanten === 0;
     return {
       tile: best.tile,
-      riichi: becomesTenpai && view.ownIsClosed && !view.ownRiichi,
+      riichi:
+        becomesTenpai &&
+        view.ownIsClosed &&
+        !view.ownRiichi &&
+        shouldDeclareWorldRiichi(best, view),
     };
   },
   ...alwaysWin,
@@ -389,7 +393,8 @@ function chooseMildRiskCandidate(
 
   let best = candidates[0];
   let bestScore = -Infinity;
-  for (const c of candidates) {
+  for (let idx = 0; idx < candidates.length; idx++) {
+    const c = candidates[idx];
     const riskWeight =
       c.resultingShanten <= 1
         ? 600
@@ -403,6 +408,146 @@ function chooseMildRiskCandidate(
     }
   }
   return best;
+}
+
+function chooseWorldCandidate(
+  candidates: ReturnType<typeof evaluateDiscards>["candidates"],
+  view: PlayerView,
+  hand14: TileId[]
+) {
+  const opponentRiichiCount = view.opponentRiichi.filter((b, i) => i !== view.seatIndex && b).length;
+  const dealerRiichi = view.seatIndex !== 0 && view.opponentRiichi[0];
+  const lateHand = view.junme >= 12;
+  const promiseMemo = new Map<TileId, number>();
+
+  let best = candidates[0];
+  let bestScore = -Infinity;
+  for (let idx = 0; idx < candidates.length; idx++) {
+    const c = candidates[idx];
+    const value = c.hanPotential + c.doraCount;
+    const tenpaiWait =
+      c.resultingShanten === 0
+        ? c.ukeireCount * 130 +
+          c.ukeireKinds * 90 -
+          (c.ukeireKinds === 1 ? 420 : 0) -
+          (c.ukeireCount <= 3 ? 300 : 0)
+        : 0;
+    const oneShantenShape =
+      c.resultingShanten === 1
+        ? c.ukeireCount * 38 + c.ukeireKinds * 28 + value * 120
+        : 0;
+    const lateSpeed =
+      lateHand && c.resultingShanten <= 1
+        ? c.ukeireCount * 35 + c.ukeireKinds * 20
+        : 0;
+    const monteCarloPromise =
+      opponentRiichiCount === 0 && idx < 3 && c.resultingShanten <= 1
+        ? worldOneStepPromise(c.tile, hand14, view.seenCounts, promiseMemo)
+        : 0;
+
+    let score =
+      c.score +
+      tenpaiWait +
+      oneShantenShape +
+      lateSpeed +
+      monteCarloPromise +
+      value * 170;
+
+    if (opponentRiichiCount > 0) {
+      const pressure = opponentRiichiCount * (dealerRiichi ? 1.3 : 1) * (lateHand ? 1.25 : 1);
+      const riskWeight = worldRiskWeight(c, value, view);
+      score -= c.danger * riskWeight * pressure;
+
+      // Keep a real betaori shelf: when the hand is not ready, exact safety can beat small speed gains.
+      if (c.danger === 0 && c.resultingShanten >= 1) score += 2800 * opponentRiichiCount;
+      else if (c.danger < 0.18 && c.resultingShanten >= 1) score += 850 * opponentRiichiCount;
+    }
+
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function worldOneStepPromise(
+  discard: TileId,
+  hand14: TileId[],
+  seenCounts: number[],
+  memo: Map<TileId, number>
+): number {
+  const cached = memo.get(discard);
+  if (cached !== undefined) return cached;
+
+  const tiles13 = removeOnce(hand14, discard);
+  const counts = tilesToCounts(tiles13);
+  const baseShanten = shantenAllFromCounts(counts).shanten;
+  const sampleTiles = deterministicWallSamples(counts, seenCounts, 3);
+  if (sampleTiles.length === 0) {
+    memo.set(discard, 0);
+    return 0;
+  }
+
+  let total = 0;
+  for (const draw of sampleTiles) {
+    counts[draw]++;
+    let bestShanten = Infinity;
+    for (let id = 0; id < NUM_TILES; id++) {
+      if (counts[id] === 0) continue;
+      counts[id]--;
+      const shanten = shantenAllFromCounts(counts).shanten;
+      counts[id]++;
+      if (shanten < bestShanten) bestShanten = shanten;
+    }
+    counts[draw]--;
+    total += (baseShanten - bestShanten) * 520 + (bestShanten === 0 ? 160 : 0);
+  }
+
+  const value = total / sampleTiles.length;
+  memo.set(discard, value);
+  return value;
+}
+
+function deterministicWallSamples(
+  ownCounts: number[],
+  seenCounts: number[],
+  limit: number
+): TileId[] {
+  const weighted: { tile: TileId; weight: number }[] = [];
+  for (let id = 0; id < NUM_TILES; id++) {
+    const remaining = TILES_PER_KIND - ownCounts[id] - (seenCounts[id] ?? 0);
+    for (let i = 0; i < remaining; i++) {
+      const weight = ((id + 3) * 1103515245 + (i + 1) * 2654435761) >>> 0;
+      weighted.push({ tile: id, weight });
+    }
+  }
+  weighted.sort((a, b) => a.weight - b.weight);
+  return weighted.slice(0, limit).map((x) => x.tile);
+}
+
+function removeOnce<T>(arr: T[], val: T): T[] {
+  const out = arr.slice();
+  const idx = out.indexOf(val);
+  if (idx >= 0) out.splice(idx, 1);
+  return out;
+}
+
+function worldRiskWeight(
+  c: ReturnType<typeof evaluateDiscards>["best"],
+  value: number,
+  view: PlayerView
+): number {
+  if (c.resultingShanten <= 0) {
+    const goodWait = c.ukeireKinds >= 2 || c.ukeireCount >= 5;
+    return Math.max(450, 1250 - value * 180 - (goodWait ? 260 : 0));
+  }
+  if (c.resultingShanten === 1) {
+    const speed = c.ukeireCount * 45 + c.ukeireKinds * 35;
+    const base = view.junme >= 12 ? 7600 : 5600;
+    return Math.max(1700, base - value * 390 - speed);
+  }
+  return view.junme >= 10 ? 17000 : 12000;
 }
 
 function chooseValueCandidate(
@@ -460,6 +605,21 @@ function shouldDeclareRiichi(
   if (c.ukeireCount >= 6) return true;
   if (value >= 2) return true;
   return false;
+}
+
+function shouldDeclareWorldRiichi(
+  c: ReturnType<typeof evaluateDiscards>["best"],
+  view: PlayerView
+): boolean {
+  const opponentRiichi = view.opponentRiichi.some((b, i) => i !== view.seatIndex && b);
+  const value = c.hanPotential + c.doraCount;
+  const goodWait = c.ukeireKinds >= 2 || c.ukeireCount >= 5;
+  if (opponentRiichi) {
+    if (c.danger >= 0.55 && value < 2 && !goodWait) return false;
+    return value >= 1 || goodWait || view.junme >= 11;
+  }
+  if (view.junme <= 6 && !goodWait && value === 0) return false;
+  return shouldDeclareRiichi(c, view);
 }
 
 function riichiTsumogiri(view: PlayerView): { tile: TileId; riichi: boolean } | null {
