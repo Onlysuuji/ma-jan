@@ -25,6 +25,7 @@ import {
 } from "@/lib/mahjong/match";
 import { worldAgent4 } from "@/lib/ai/agents4";
 import { doraFromIndicator, sortTiles, tileDisplay } from "@/lib/mahjong/tiles";
+import { waitingTiles } from "@/lib/mahjong/win";
 import type { TileId } from "@/lib/mahjong/types";
 
 type ScreenMode = "trainer" | "match4";
@@ -191,6 +192,7 @@ function FourPlayerView() {
   const [seed, setSeed] = useState(42);
   const [state, setState] = useState<MatchState>(() => createMatch(42));
   const [seatModes, setSeatModes] = useState<SeatMode[]>(["assist", "ai", "ai", "ai"]);
+  const [revealAllHands, setRevealAllHands] = useState(false);
 
   const doraTiles = useMemo(
     () => state.doraIndicators.map(doraFromIndicator),
@@ -211,7 +213,7 @@ function FourPlayerView() {
   }, [humanHand14, state]);
 
   const runAiUntilHuman = useCallback(() => {
-    setState((s) => advanceUntilHuman(s, seatModes));
+    setState((s) => advanceWithAiControl(s, seatModes));
   }, [seatModes]);
 
   const handleNewMatch = useCallback(() => {
@@ -258,6 +260,13 @@ function FourPlayerView() {
             <button className="btn primary" onClick={runAiUntilHuman} disabled={state.finished}>
               AIを進める
             </button>
+            <button
+              className="btn"
+              onClick={() => setRevealAllHands((v) => !v)}
+              aria-pressed={revealAllHands}
+            >
+              {revealAllHands ? "手牌を隠す" : "全手牌を見る"}
+            </button>
             <button className="btn" onClick={handleResetSameSeed}>同じ配牌</button>
             <button className="btn" onClick={handleNewMatch}>新しい対局</button>
           </div>
@@ -290,7 +299,7 @@ function FourPlayerView() {
               seat={seat}
               doraTiles={doraTiles}
               active={state.currentPlayer === seat}
-              reveal={seatModes[seat] === "assist"}
+              reveal={state.finished || revealAllHands || seatModes[seat] === "assist"}
               previewDraw={state.currentPlayer === seat ? previewDraw : null}
               recommended={state.currentPlayer === seat ? aiSuggestion?.best.tile ?? null : null}
               onDiscard={
@@ -303,6 +312,7 @@ function FourPlayerView() {
         </div>
 
         {resultText && <div className="result-banner">{resultText}</div>}
+        {state.finished && <EndStateDetails state={state} doraTiles={doraTiles} />}
       </div>
 
       <div className="side-stack">
@@ -431,6 +441,71 @@ function PlayerPanel({
   );
 }
 
+function EndStateDetails({
+  state,
+  doraTiles,
+}: {
+  state: MatchState;
+  doraTiles: TileId[];
+}) {
+  const result = state.result;
+  return (
+    <div className="end-state">
+      {state.players.map((player, seat) => {
+        const waits = waitingTiles(player.closed);
+        const isWinner = result?.winner === seat;
+        const isLoser = result?.loser === seat;
+        const hand = sortTiles(
+          player.drawn === null ? player.closed : [...player.closed, player.drawn]
+        );
+        return (
+          <div className="end-player" key={seat}>
+            <div className="end-player-head">
+              <strong>{SEAT_NAMES[seat]}</strong>
+              {isWinner && <span className="tag riichi">和了</span>}
+              {isLoser && <span className="tag danger-tag">放銃</span>}
+              <span className="muted">
+                {result ? `${formatDelta(result.deltas[seat])}点` : ""}
+              </span>
+            </div>
+            <div className="mini-hand open">
+              {hand.map((t, i) => (
+                <TileView
+                  key={`${seat}-${t}-${i}`}
+                  tile={t}
+                  size="tiny"
+                  dora={doraTiles.includes(t)}
+                />
+              ))}
+            </div>
+            <div className="end-meta">
+              <span>待ち</span>
+              {waits.length > 0 ? (
+                <span className="end-tiles">
+                  {waits.map((t) => tileDisplay(t)).join(" ")}
+                </span>
+              ) : (
+                <span className="muted">なし</span>
+              )}
+              {result?.tile !== undefined && isWinner && (
+                <span>和了牌 {tileDisplay(result.tile)}</span>
+              )}
+              {result?.tile !== undefined && isLoser && (
+                <span>放銃牌 {tileDisplay(result.tile)}</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatDelta(delta: number): string {
+  if (delta > 0) return `+${delta}`;
+  return `${delta}`;
+}
+
 function Info({
   label,
   value,
@@ -468,10 +543,17 @@ function advanceUntilHuman(state: MatchState, seatModes: SeatMode[]): MatchState
   return cur;
 }
 
+function advanceWithAiControl(state: MatchState, seatModes: SeatMode[]): MatchState {
+  if (state.finished) return state;
+  const first = stepHand(state, buildAgents(seatModes, -1, undefined, true));
+  return advanceUntilHuman(first, seatModes);
+}
+
 function buildAgents(
   seatModes: SeatMode[],
   humanSeat: number,
-  decision?: { tile: TileId; riichi: boolean }
+  decision?: { tile: TileId; riichi: boolean },
+  forceAi = false
 ): Agent4[] {
   return seatModes.map((mode, seat) => {
     if (seat === humanSeat && decision) {
@@ -481,7 +563,7 @@ function buildAgents(
         decideDiscard: () => decision,
       };
     }
-    return mode === "ai" ? worldAgent4 : passAgent;
+    return forceAi || mode === "ai" ? worldAgent4 : passAgent;
   });
 }
 
