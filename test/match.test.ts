@@ -42,6 +42,8 @@ test("riichi player is forced to tsumogiri", () => {
     name: "illegal",
     decideDiscard: () => ({ tile: state.players[0].closed[0], riichi: false }),
     decidePon: () => ({ call: false }),
+    decideChi: () => ({ call: false }),
+    decideKan: () => ({ call: false }),
     decideTsumo: () => false,
     decideRon: () => false,
   };
@@ -73,6 +75,8 @@ test("yakuhai pon opens the caller and advances after the call discard", () => {
     name: "base",
     decideDiscard: () => ({ tile: 31, riichi: false }),
     decidePon: () => ({ call: false }),
+    decideChi: () => ({ call: false }),
+    decideKan: () => ({ call: false }),
     decideTsumo: () => false,
     decideRon: () => false,
   };
@@ -92,4 +96,76 @@ test("yakuhai pon opens the caller and advances after the call discard", () => {
   assert.deepEqual(final.players[1].melds[0].tiles, [31, 31, 31]);
   assert.equal(final.players[1].closed.length, 10);
   assert.equal(final.currentPlayer, 2);
+});
+
+test("chi opens the next player and advances after the call discard", () => {
+  const state = createMatch(100);
+  state.currentPlayer = 0;
+  state.wall = [0, ...state.wall.slice(1)];
+  state.wallIdx = 0;
+  state.players[0].closed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 4];
+  state.players[1].closed = [0, 1, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15];
+  state.players[2].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  state.players[3].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+  const baseAgent = {
+    name: "base",
+    decideDiscard: () => ({ tile: 4, riichi: false }),
+    decidePon: () => ({ call: false }),
+    decideChi: () => ({ call: false }),
+    decideKan: () => ({ call: false }),
+    decideTsumo: () => false,
+    decideRon: () => false,
+  };
+  const chiAgent = {
+    ...baseAgent,
+    name: "chi",
+    decideChi: () => ({ call: true, tiles: [3, 4, 5], discard: 0 }),
+  };
+
+  const final = stepHand(state, [baseAgent, chiAgent, baseAgent, baseAgent]);
+  const chi = final.log.find((ev) => ev.kind === "chi");
+
+  assert.ok(chi);
+  assert.equal(final.players[1].isClosed, false);
+  assert.equal(final.players[1].melds.length, 1);
+  assert.deepEqual(final.players[1].melds[0].tiles, [3, 4, 5]);
+  assert.equal(final.players[1].closed.length, 10);
+  assert.equal(final.currentPlayer, 2);
+});
+
+test("daiminkan opens the caller and gives the next turn to the caller", () => {
+  const state = createMatch(101);
+  state.currentPlayer = 0;
+  state.wall = [0, ...state.wall.slice(1)];
+  state.wallIdx = 0;
+  state.players[0].closed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 31];
+  state.players[1].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 31, 31, 31];
+  state.players[2].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  state.players[3].closed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+  const baseAgent = {
+    name: "base",
+    decideDiscard: () => ({ tile: 31, riichi: false }),
+    decidePon: () => ({ call: false }),
+    decideChi: () => ({ call: false }),
+    decideKan: () => ({ call: false }),
+    decideTsumo: () => false,
+    decideRon: () => false,
+  };
+  const kanAgent = {
+    ...baseAgent,
+    name: "kan",
+    decideKan: () => ({ call: true }),
+  };
+
+  const final = stepHand(state, [baseAgent, kanAgent, baseAgent, baseAgent]);
+  const kan = final.log.find((ev) => ev.kind === "kan");
+
+  assert.ok(kan);
+  assert.equal(final.players[1].isClosed, false);
+  assert.equal(final.players[1].melds.length, 1);
+  assert.deepEqual(final.players[1].melds[0].tiles, [31, 31, 31, 31]);
+  assert.equal(final.players[1].closed.length, 10);
+  assert.equal(final.currentPlayer, 1);
 });

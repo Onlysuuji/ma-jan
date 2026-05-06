@@ -38,6 +38,8 @@ const passAgent: Agent4 = {
   name: "human-pass",
   decideDiscard: () => ({ tile: -1, riichi: false }),
   decidePon: () => ({ call: false }),
+  decideChi: () => ({ call: false }),
+  decideKan: () => ({ call: false }),
   decideTsumo: () => true,
   decideRon: () => true,
 };
@@ -628,6 +630,10 @@ function eventText(ev: MatchState["log"][number]): string {
       return `${SEAT_NAMES[ev.player]} 打 ${tileDisplay(ev.tile)}${ev.riichi ? " リーチ" : ""}`;
     case "pon":
       return `${SEAT_NAMES[ev.player]} ポン (${tileDisplay(ev.tile)}) → 打 ${tileDisplay(ev.discard)}`;
+    case "chi":
+      return `${SEAT_NAMES[ev.player]} チー (${ev.tiles.map(tileDisplay).join(" ")}) → 打 ${tileDisplay(ev.discard)}`;
+    case "kan":
+      return `${SEAT_NAMES[ev.player]} カン (${tileDisplay(ev.tile)})`;
     case "tsumo":
       return `${SEAT_NAMES[ev.player]} ツモ和了`;
     case "ron":

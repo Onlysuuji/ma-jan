@@ -32,6 +32,8 @@ function fullHand(view: PlayerView): TileId[] {
 /** Always wins when offered (tsumo/ron). */
 const alwaysWin = {
   decidePon: (_v: PlayerView, _t: TileId, _f: number) => ({ call: false }),
+  decideChi: (_v: PlayerView, _t: TileId, _f: number) => ({ call: false }),
+  decideKan: (_v: PlayerView, _t: TileId, _f: number | null) => ({ call: false }),
   decideTsumo: (_v: PlayerView, _t: TileId, _y: YakuResult) => true,
   decideRon: (_v: PlayerView, _t: TileId, _f: number, _y: YakuResult) => true,
 };
@@ -205,14 +207,49 @@ export const worldAgent4: Agent4 = {
   ...alwaysWin,
   decidePon(view, tile, _fromSeat) {
     if (view.ownRiichi) return { call: false };
-    if (!isYakuhai(tile, view.roundWind, view.seatWind)) return { call: false };
     if (view.ownClosed.filter((t) => t === tile).length < 2) return { call: false };
+    const isValueCall = isYakuhai(tile, view.roundWind, view.seatWind);
+    const isKuitanCall = canOpenTanyao([...view.ownClosed, tile]);
+    if (!isValueCall && !isKuitanCall) return { call: false };
     const currentShanten = shantenAllFromCounts(tilesToCounts(view.ownClosed)).shanten;
-    if (currentShanten <= 0) return { call: false };
+    if (currentShanten <= 0 && !isValueCall) return { call: false };
 
     const afterCall = removeOnce(removeOnce(view.ownClosed, tile), tile);
     const discard = choosePostPonDiscard(afterCall, view);
     return { call: true, discard };
+  },
+  decideChi(view, tile, fromSeat) {
+    if (view.ownRiichi) return { call: false };
+    if (fromSeat !== (view.seatIndex + 3) % 4) return { call: false };
+    if (!isSimple(tile)) return { call: false };
+    if (!canOpenTanyao([...view.ownClosed, tile])) return { call: false };
+    const currentShanten = shantenAllFromCounts(tilesToCounts(view.ownClosed)).shanten;
+    if (currentShanten <= 0 || currentShanten >= 4) return { call: false };
+
+    const options = possibleChiMelds(view.ownClosed, tile);
+    if (options.length === 0) return { call: false };
+    let bestTiles = options[0];
+    let bestDiscard = chooseOpenHandDiscard(removeChiTiles(view.ownClosed, bestTiles, tile), view);
+    let bestScore = -Infinity;
+    for (const tiles of options) {
+      const afterCall = removeChiTiles(view.ownClosed, tiles, tile);
+      const discard = chooseOpenHandDiscard(afterCall, view);
+      const kept = removeOnce(afterCall, discard);
+      const score = neighborCount(discard, kept) * -40 - (countDora([discard], view.doraTiles) * 500);
+      if (score > bestScore) {
+        bestTiles = tiles;
+        bestDiscard = discard;
+        bestScore = score;
+      }
+    }
+    return { call: true, tiles: bestTiles, discard: bestDiscard };
+  },
+  decideKan(view, tile, fromSeat) {
+    if (fromSeat === null || view.ownRiichi) return { call: false };
+    if (!isYakuhai(tile, view.roundWind, view.seatWind)) return { call: false };
+    if (view.ownClosed.filter((t) => t === tile).length < 3) return { call: false };
+    const currentShanten = shantenAllFromCounts(tilesToCounts(view.ownClosed)).shanten;
+    return { call: currentShanten >= 2 };
   },
   decideDiscard(view) {
     const locked = riichiTsumogiri(view);
@@ -648,6 +685,28 @@ function choosePostPonDiscard(tiles11: TileId[], view: PlayerView): TileId {
   return chooseOpenHandDiscard(tiles11, view);
 }
 
+function possibleChiMelds(closed: TileId[], called: TileId): TileId[][] {
+  if (called >= 27) return [];
+  const out: TileId[][] = [];
+  const suitStart = Math.floor(called / 9) * 9;
+  for (const start of [called - 2, called - 1, called]) {
+    if (start < suitStart || start + 2 >= suitStart + 9) continue;
+    const tiles = [start, start + 1, start + 2];
+    const needed = tiles.filter((t) => t !== called);
+    if (needed.every((t) => closed.includes(t)) && tiles.every(isSimple)) out.push(tiles);
+  }
+  return out;
+}
+
+function removeChiTiles(closed: TileId[], meldTiles: TileId[], called: TileId): TileId[] {
+  let out = closed.slice();
+  for (const tile of meldTiles) {
+    if (tile === called) continue;
+    out = removeOnce(out, tile);
+  }
+  return out;
+}
+
 function chooseOpenHandDiscard(tiles: TileId[], view: PlayerView): TileId {
   let best = tiles[0];
   let bestScore = Infinity;
@@ -667,6 +726,14 @@ function chooseOpenHandDiscard(tiles: TileId[], view: PlayerView): TileId {
     }
   }
   return best;
+}
+
+function canOpenTanyao(tiles: TileId[]): boolean {
+  return tiles.length > 0 && tiles.every(isSimple);
+}
+
+function isSimple(tile: TileId): boolean {
+  return tile < 27 && tile % 9 !== 0 && tile % 9 !== 8;
 }
 
 function keepsPair(tile: TileId, tiles: TileId[]): boolean {

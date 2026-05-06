@@ -7,7 +7,7 @@ import { detectYaku, type YakuResult } from "./yaku";
 import { shantenAllFromCounts } from "./shanten";
 
 export interface MatchMeld {
-  kind: "pon";
+  kind: "chi" | "pon" | "kan";
   tiles: TileId[];
   fromSeat: number;
 }
@@ -58,6 +58,8 @@ export type MatchEvent =
   | { kind: "draw"; player: number; tile: TileId; junme: number }
   | { kind: "discard"; player: number; tile: TileId; riichi: boolean; junme: number }
   | { kind: "pon"; player: number; fromSeat: number; tile: TileId; discard: TileId; junme: number }
+  | { kind: "chi"; player: number; fromSeat: number; tile: TileId; tiles: TileId[]; discard: TileId; junme: number }
+  | { kind: "kan"; player: number; fromSeat: number | null; tile: TileId; junme: number }
   | { kind: "tsumo"; player: number; yaku: YakuResult }
   | { kind: "ron"; winner: number; loser: number; tile: TileId; yaku: YakuResult }
   | { kind: "ryukyoku"; tenpai: boolean[] };
@@ -103,6 +105,10 @@ export interface Agent4 {
   decideDiscard(view: PlayerView): { tile: TileId; riichi: boolean };
   /** Decide whether to pon a discard. Return the post-call discard tile when calling. */
   decidePon(view: PlayerView, tile: TileId, fromSeat: number): { call: boolean; discard?: TileId };
+  /** Decide whether to chi a discard from the left player. */
+  decideChi(view: PlayerView, tile: TileId, fromSeat: number): { call: boolean; tiles?: TileId[]; discard?: TileId };
+  /** Decide whether to kan. v1 exposes the hook; agents should be conservative. */
+  decideKan(view: PlayerView, tile: TileId, fromSeat: number | null): { call: boolean };
   /** Decide whether to declare a tsumo win (only called if win is legal). */
   decideTsumo(view: PlayerView, winTile: TileId, yaku: YakuResult): boolean;
   /** Decide whether to declare a ron (only called if win is legal). */
@@ -359,7 +365,38 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
     }
   }
 
-  // Pon: v1 only supports pon calls, with AI expected to use this primarily for yakuhai.
+  // Daiminkan: implemented conservatively; caller takes the next draw from the live wall in v1.
+  for (let i = 1; i <= 3; i++) {
+    const callerSeat = (seat + i) % 4;
+    const caller = state.players[callerSeat];
+    if (caller.riichi || caller.closed.filter((t) => t === discardTile).length < 3) continue;
+    const callView = makeView({ ...state, wallIdx: newWallIdx }, callerSeat);
+    const call = agents[callerSeat].decideKan(callView, discardTile, seat);
+    if (!call.call) continue;
+
+    caller.closed = removeOnce(removeOnce(removeOnce(caller.closed, discardTile), discardTile), discardTile);
+    caller.melds.push({ kind: "kan", tiles: [discardTile, discardTile, discardTile, discardTile], fromSeat: seat });
+    caller.isClosed = false;
+    state.seenCounts[discardTile] += 3;
+    for (const p of state.players) p.ippatsu = false;
+    return {
+      ...state,
+      wallIdx: newWallIdx,
+      currentPlayer: callerSeat,
+      log: [
+        ...log,
+        {
+          kind: "kan",
+          player: callerSeat,
+          fromSeat: seat,
+          tile: discardTile,
+          junme: state.junme,
+        },
+      ],
+    };
+  }
+
+  // Pon: higher priority than chi.
   for (let i = 1; i <= 3; i++) {
     const callerSeat = (seat + i) % 4;
     const caller = state.players[callerSeat];
@@ -407,6 +444,56 @@ export function stepHand(state: MatchState, agents: Agent4[]): MatchState {
     };
   }
 
+  // Chi: only the next player may call from the left. v1 allows targeted kuitan/shape calls.
+  const chiSeat = (seat + 1) % 4;
+  const chiCaller = state.players[chiSeat];
+  if (!chiCaller.riichi && discardTile < 27) {
+    const chiView = makeView({ ...state, wallIdx: newWallIdx }, chiSeat);
+    const call = agents[chiSeat].decideChi(chiView, discardTile, seat);
+    if (call.call && call.tiles && call.discard !== undefined && isLegalChiTiles(call.tiles, discardTile, chiCaller.closed)) {
+      const usedFromHand = call.tiles.filter((t) => t !== discardTile);
+      chiCaller.closed = removeOnce(removeOnce(chiCaller.closed, usedFromHand[0]), usedFromHand[1]);
+      chiCaller.melds.push({ kind: "chi", tiles: sortTiles(call.tiles), fromSeat: seat });
+      chiCaller.isClosed = false;
+      state.seenCounts[usedFromHand[0]]++;
+      state.seenCounts[usedFromHand[1]]++;
+      const discardAfterChi = chiCaller.closed.includes(call.discard) ? call.discard : chiCaller.closed[0];
+      chiCaller.closed = sortTiles(removeOnce(chiCaller.closed, discardAfterChi));
+      chiCaller.river.push(discardAfterChi);
+      state.seenCounts[discardAfterChi]++;
+
+      for (const p of state.players) p.ippatsu = false;
+
+      const nextSeatAfterCall = (chiSeat + 1) % 4;
+      const nextJunmeAfterCall = nextSeatAfterCall === state.dealer ? state.junme + 1 : state.junme;
+      return {
+        ...state,
+        wallIdx: newWallIdx,
+        currentPlayer: nextSeatAfterCall,
+        junme: nextJunmeAfterCall,
+        log: [
+          ...log,
+          {
+            kind: "chi",
+            player: chiSeat,
+            fromSeat: seat,
+            tile: discardTile,
+            tiles: sortTiles(call.tiles),
+            discard: discardAfterChi,
+            junme: state.junme,
+          },
+          {
+            kind: "discard",
+            player: chiSeat,
+            tile: discardAfterChi,
+            riichi: false,
+            junme: state.junme,
+          },
+        ],
+      };
+    }
+  }
+
   // Cancel all opponents' ippatsu after this discard (anyone who'd previously declared riichi loses ippatsu after a single round)
   for (const p of state.players) {
     if (p.riichi && state.players.indexOf(p) !== seat) {
@@ -438,6 +525,22 @@ function removeOnce<T>(arr: T[], val: T): T[] {
   const idx = out.indexOf(val);
   if (idx >= 0) out.splice(idx, 1);
   return out;
+}
+
+function isLegalChiTiles(tiles: TileId[], called: TileId, closed: TileId[]): boolean {
+  if (tiles.length !== 3 || !tiles.includes(called)) return false;
+  const sorted = sortTiles(tiles);
+  if (sorted.some((t) => t >= 27)) return false;
+  if (Math.floor(sorted[0] / 9) !== Math.floor(sorted[2] / 9)) return false;
+  if (sorted[1] !== sorted[0] + 1 || sorted[2] !== sorted[1] + 1) return false;
+  const needed = tiles.filter((t, i) => i !== tiles.indexOf(called));
+  const c = closed.slice();
+  for (const t of needed) {
+    const idx = c.indexOf(t);
+    if (idx < 0) return false;
+    c.splice(idx, 1);
+  }
+  return true;
 }
 
 function isWinForPlayer(closedWithAgari: TileId[], player: MatchPlayer): boolean {
@@ -519,11 +622,14 @@ function detectYakuForPlayer(
   const yaku = [];
   for (const meld of player.melds) {
     const t = meld.tiles[0];
-    if (isYakuhai(t, input.roundWind, input.seatWind)) {
+    if (meld.kind !== "chi" && isYakuhai(t, input.roundWind, input.seatWind)) {
       yaku.push({ name: "役牌(副露)", han: 1 });
     }
   }
   const allTiles = [...closedWithAgari, ...player.melds.flatMap((m) => m.tiles)];
+  if (allTiles.every((t) => t < 27 && t % 9 !== 0 && t % 9 !== 8)) {
+    yaku.push({ name: "断么九", han: 1 });
+  }
   for (const d of input.doraTiles) {
     const dora = allTiles.filter((t) => t === d).length;
     if (dora > 0) yaku.push({ name: "ドラ", han: dora });
