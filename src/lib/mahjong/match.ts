@@ -152,7 +152,7 @@ export function createMatch(seed: number, dealer = 0): MatchState {
   };
 }
 
-function makeView(state: MatchState, seat: number): PlayerView {
+export function makeView(state: MatchState, seat: number): PlayerView {
   const p = state.players[seat];
   return {
     seatIndex: seat,
