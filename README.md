@@ -22,6 +22,16 @@ npm run build
 npm test
 ```
 
+外部Web画面の読み取り:
+
+```bash
+python3 -m pip install -r python/screen_reader/requirements.txt
+cp python/screen_reader/config.example.yml python/screen_reader/config.yml
+python3 python/screen_reader/reader.py --config python/screen_reader/config.yml
+```
+
+`config.yml` の固定座標と `python/screen_reader/templates/` の牌画像を対象サイトに合わせると、画面上の「外部読み取り」タブにAI推奨が表示されます。テンプレートは通常34種に加えて、赤5を使うサイトでは `0m.png`, `0p.png`, `0s.png` も置けます。
+
 AI ベンチ:
 
 ```bash

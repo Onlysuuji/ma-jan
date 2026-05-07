@@ -1,0 +1,86 @@
+# Copy this file to config.yml and adjust coordinates for the target browser.
+# capture_region is an absolute screen rectangle. All slots are relative to it.
+api_url: "http://localhost:3000/api/external-state"
+interval_seconds: 0.5
+match_threshold: 0.82
+template_dir: "./templates"
+
+capture_region:
+  left: 0
+  top: 0
+  width: 1280
+  height: 720
+
+# Area coordinates are examples only. Use screenshots from your target site and
+# replace x/y/w/h with the fixed rectangles. Player names are screen-relative:
+# self=bottom, right=right side, across=top, left=left side.
+#
+# Color markers are active when enough pixels in the rectangle are close to
+# active_rgb. Coordinates are relative to capture_region.
+# Example:
+# turn_marker: { x: 100, y: 100, w: 8, h: 8, active_rgb: [255, 220, 80], tolerance: 45, min_ratio: 0.35 }
+areas:
+  table:
+    dora_indicators:
+      - { x: 560, y: 330, w: 34, h: 46 }
+    round_wind: null
+    honba: null
+    kyotaku: null
+    wall_remaining: null
+    current_turn_marker: null
+  players:
+    self:
+      hand:
+        - { x: 120, y: 610, w: 42, h: 58 }
+        - { x: 166, y: 610, w: 42, h: 58 }
+        - { x: 212, y: 610, w: 42, h: 58 }
+        - { x: 258, y: 610, w: 42, h: 58 }
+        - { x: 304, y: 610, w: 42, h: 58 }
+        - { x: 350, y: 610, w: 42, h: 58 }
+        - { x: 396, y: 610, w: 42, h: 58 }
+        - { x: 442, y: 610, w: 42, h: 58 }
+        - { x: 488, y: 610, w: 42, h: 58 }
+        - { x: 534, y: 610, w: 42, h: 58 }
+        - { x: 580, y: 610, w: 42, h: 58 }
+        - { x: 626, y: 610, w: 42, h: 58 }
+        - { x: 672, y: 610, w: 42, h: 58 }
+      drawn: { x: 742, y: 610, w: 42, h: 58 }
+      river:
+        - { x: 420, y: 500, w: 34, h: 46 }
+        - { x: 458, y: 500, w: 34, h: 46 }
+        - { x: 496, y: 500, w: 34, h: 46 }
+      melds: []
+      riichi_marker: null
+      dealer_marker: null
+      turn_marker: null
+    right:
+      river: []
+      melds: []
+      riichi_marker: null
+      dealer_marker: null
+      turn_marker: null
+    across:
+      river: []
+      melds: []
+      riichi_marker: null
+      dealer_marker: null
+      turn_marker: null
+    left:
+      river: []
+      melds: []
+      riichi_marker: null
+      dealer_marker: null
+      turn_marker: null
+
+# Legacy format is still supported:
+# slots:
+#   hand:
+#     - { x: 120, y: 610, w: 42, h: 58 }
+#   drawn: { x: 742, y: 610, w: 42, h: 58 }
+#   dora_indicators:
+#     - { x: 560, y: 330, w: 34, h: 46 }
+#   own_river: []
+#   opponent_rivers:
+#     - []
+#     - []
+#     - []

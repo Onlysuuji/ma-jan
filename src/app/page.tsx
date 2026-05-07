@@ -26,9 +26,10 @@ import {
 import { worldAgent4 } from "@/lib/ai/agents4";
 import { doraFromIndicator, sortTiles, tileDisplay } from "@/lib/mahjong/tiles";
 import { waitingTiles } from "@/lib/mahjong/win";
-import type { TileId } from "@/lib/mahjong/types";
+import { NUM_TILES, type TileId } from "@/lib/mahjong/types";
+import { externalFullHand, type ExternalScreenState } from "@/lib/external/screenState";
 
-type ScreenMode = "trainer" | "match4";
+type ScreenMode = "trainer" | "match4" | "external";
 type SeatMode = "assist" | "ai";
 
 const SEAT_NAMES = ["あなた", "下家", "対面", "上家"];
@@ -74,10 +75,22 @@ export default function Page() {
           >
             4人対戦
           </button>
+          <button
+            className={mode === "external" ? "active" : ""}
+            onClick={() => setMode("external")}
+          >
+            外部読み取り
+          </button>
         </div>
       </div>
       {mounted ? (
-        mode === "trainer" ? <TrainerView /> : <FourPlayerView />
+        mode === "trainer" ? (
+          <TrainerView />
+        ) : mode === "match4" ? (
+          <FourPlayerView />
+        ) : (
+          <ExternalReaderView />
+        )
       ) : (
         <div className="panel">
           <p className="muted">Loading...</p>
@@ -85,6 +98,212 @@ export default function Page() {
       )}
     </div>
   );
+}
+
+function ExternalReaderView() {
+  const [externalState, setExternalState] = useState<ExternalScreenState | null>(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/external-state", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { state: ExternalScreenState | null };
+      setExternalState(data.state);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "読み取り状態を取得できません");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 1000);
+    return () => window.clearInterval(id);
+  }, [refresh]);
+
+  const doraTiles = useMemo(
+    () => externalState?.doraIndicators.map(doraFromIndicator) ?? [],
+    [externalState]
+  );
+  const fullHandFromScreen = useMemo(
+    () => (externalState ? externalFullHand(externalState) : []),
+    [externalState]
+  );
+  const canEvaluate =
+    externalState !== null &&
+    fullHandFromScreen.length === 14 &&
+    externalState.confidence >= 0.75;
+  const externalEval = useMemo(() => {
+    if (!externalState || !canEvaluate) return null;
+    return evaluateDiscards(fullHandFromScreen, {
+      doraTiles,
+      seenCounts: seenCountsFromExternal(externalState),
+      roundWind: 1,
+      seatWind: 1,
+      junme: Math.max(1, Math.floor(externalState.ownRiver.length / 1) + 1),
+      isClosed: true,
+      mode: "auto",
+      ownRiver: externalState.ownRiver,
+      opponents: externalState.opponentRivers.map((river, index) => ({
+        river,
+        riichi: externalState.riichiPlayers[index + 1] ?? false,
+        riichiJunme: 0,
+      })),
+    });
+  }, [canEvaluate, doraTiles, externalState, fullHandFromScreen]);
+
+  return (
+    <div className="layout">
+      <div className="panel">
+        <div className="match-header">
+          <div>
+            <h2>外部読み取り</h2>
+            <div className="muted">
+              Python reader から受け取った最新状態を表示します。
+            </div>
+          </div>
+          <button className="btn" onClick={refresh}>
+            更新
+          </button>
+        </div>
+
+        {error && <div className="warning">API取得エラー: {error}</div>}
+        {!externalState && !error && (
+          <p className="muted">まだ読み取りデータが届いていません。</p>
+        )}
+
+        {externalState && (
+          <>
+            <div className="external-status">
+              <Info label="取得時刻" value={formatTimestamp(externalState.capturedAt)} />
+              <Info label="受信時刻" value={formatTimestamp(externalState.receivedAt)} />
+              <Info label="信頼度" value={`${Math.round(externalState.confidence * 100)}%`} />
+              <Info label="牌数" value={`${fullHandFromScreen.length}`} />
+              <Info label="現在手番" value={externalState.currentPlayer === null ? "-" : SEAT_NAMES[externalState.currentPlayer]} />
+              <Info
+                label="リーチ"
+                value={externalState.riichiPlayers
+                  .map((active, index) => (active ? SEAT_NAMES[index] : null))
+                  .filter((name): name is string => name !== null)
+                  .join(", ") || "-"}
+              />
+            </div>
+
+            {externalState.warnings.length > 0 && (
+              <div className="warning-list">
+                {externalState.warnings.map((warning) => (
+                  <div key={warning}>{warning}</div>
+                ))}
+              </div>
+            )}
+
+            <div className="section-spacer" />
+            <h2>手牌</h2>
+            <div className="hand-row">
+              {externalState.hand.map((tile, index) => (
+                <TileView
+                  key={`hand-${tile}-${index}`}
+                  tile={tile}
+                  dora={doraTiles.includes(tile)}
+                  recommended={externalEval?.best.tile === tile}
+                />
+              ))}
+              {externalState.drawn !== null && (
+                <TileView
+                  tile={externalState.drawn}
+                  drawn
+                  dora={doraTiles.includes(externalState.drawn)}
+                  recommended={externalEval?.best.tile === externalState.drawn}
+                />
+              )}
+            </div>
+
+            <div className="section-spacer" />
+            <h2>場況</h2>
+            <div className="info-grid">
+              <Info label="ドラ表示" value="" tiles={externalState.doraIndicators} />
+              <Info label="ドラ" value="" tiles={doraTiles} dora />
+            </div>
+
+            <div className="section-spacer" />
+            <h2>河</h2>
+            <div className="external-rivers">
+              <div>
+                <div className="muted">自分</div>
+                <River tiles={externalState.ownRiver} />
+              </div>
+              {externalState.opponentRivers.map((river, index) => (
+                <div key={index}>
+                  <div className="muted">他家 {index + 1}</div>
+                  <River tiles={river} />
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div>
+        <div className="panel">
+          <h2>AI推奨</h2>
+          {externalEval ? (
+            <>
+              <div className="recommend-headline">
+                <span className="muted">おすすめ:</span>
+                <TileView tile={externalEval.best.tile} size="small" recommended />
+                <span>{tileDisplay(externalEval.best.tile)} を切る</span>
+              </div>
+              <div className="candidate-list compact">
+                {externalEval.candidates.slice(0, 8).map((candidate, index) => (
+                  <div
+                    className={`candidate-row ${index === 0 ? "best" : ""}`}
+                    key={candidate.tile}
+                  >
+                    <span className="candidate-rank">#{index + 1}</span>
+                    <TileView tile={candidate.tile} size="small" />
+                    <span className="candidate-meta">
+                      {candidate.resultingShanten === 0
+                        ? "テンパイ"
+                        : `${candidate.resultingShanten}向聴`}{" "}
+                      / 受け {candidate.ukeireCount}
+                    </span>
+                    <span className="candidate-score">{Math.round(candidate.score)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="muted">
+              14枚かつ信頼度75%以上の読み取りが届くと、推奨打牌を表示します。
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function seenCountsFromExternal(state: ExternalScreenState): number[] {
+  const counts = new Array(NUM_TILES).fill(0);
+  for (const tile of [
+    ...state.doraIndicators,
+    ...state.ownRiver,
+    ...state.opponentRivers.flat(),
+  ]) {
+    counts[tile]++;
+  }
+  return counts;
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function TrainerView() {
